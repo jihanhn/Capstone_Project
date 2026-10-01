@@ -1,100 +1,102 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { Pool } = require('pg');
 
-const dbPath = path.resolve(__dirname, '../../kontrakan_buti.db');
+// Mengambil URL koneksi otomatis dari Vercel/Supabase
+const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Gagal membuka koneksi database SQLite:', err.message);
-  } else {
-    console.log('Terhubung ke database SQLite Kontrakan Buti di:', dbPath);
+const pool = new Pool({
+  connectionString: connectionString,
+  ssl: {
+    rejectUnauthorized: false // Diperlukan untuk koneksi aman ke Supabase
   }
 });
 
-// Aktifkan Foreign Keys
-db.run('PRAGMA foreign_keys = ON;');
+pool.on('connect', () => {
+  console.log('Berhasil terhubung ke database PostgreSQL Supabase!');
+});
 
-// Helper Promise wrappers untuk kemudahan async/await
-db.runAsync = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve(this);
-    });
-  });
+pool.on('error', (err) => {
+  console.error('Database connection error:', err);
+});
+
+// Helper pintar untuk mengubah format parameter SQLite (?) menjadi PostgreSQL ($1, $2)
+const convertQuery = (sql) => {
+  let index = 1;
+  return sql.replace(/\?/g, () => `$${index++}`);
 };
 
-db.getAsync = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+// Helper Promise wrappers agar file routes Anda tidak perlu diubah sama sekali
+const db = {
+  runAsync: async (sql, params = []) => {
+    const res = await pool.query(convertQuery(sql), params);
+    return res;
+  },
+  getAsync: async (sql, params = []) => {
+    const res = await pool.query(convertQuery(sql), params);
+    return res.rows[0]; // Ambil baris pertama
+  },
+  allAsync: async (sql, params = []) => {
+    const res = await pool.query(convertQuery(sql), params);
+    return res.rows; // Ambil seluruh baris
+  }
 };
 
-db.allAsync = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-};
-
-// Inisialisasi skema tabel berdasarkan DESIGN.md
+// Inisialisasi skema tabel dengan dialek PostgreSQL
 const initDbSchema = async () => {
-  await db.runAsync(`
-    CREATE TABLE IF NOT EXISTS tbl_kontrakan (
-      kode_kontrakan TEXT PRIMARY KEY,
-      nama_kontrakan TEXT NOT NULL,
-      harga_saat_ini REAL NOT NULL,
-      status_unit TEXT NOT NULL CHECK(status_unit IN ('Terisi', 'Kosong'))
-    )
-  `);
+  try {
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS tbl_kontrakan (
+        kode_kontrakan TEXT PRIMARY KEY,
+        nama_kontrakan TEXT NOT NULL,
+        harga_saat_ini NUMERIC NOT NULL,
+        status_unit TEXT NOT NULL CHECK(status_unit IN ('Terisi', 'Kosong'))
+      )
+    `);
 
-  await db.runAsync(`
-    CREATE TABLE IF NOT EXISTS tbl_penyewa (
-      id_penyewa TEXT PRIMARY KEY,
-      nama_penyewa TEXT NOT NULL,
-      no_hp TEXT NOT NULL,
-      asal_ktp TEXT,
-      tgl_mulai_sewa DATE NOT NULL,
-      tgl_selesai_sewa DATE
-    )
-  `);
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS tbl_penyewa (
+        id_penyewa TEXT PRIMARY KEY,
+        nama_penyewa TEXT NOT NULL,
+        no_hp TEXT NOT NULL,
+        asal_ktp TEXT,
+        tgl_mulai_sewa DATE NOT NULL,
+        tgl_selesai_sewa DATE
+      )
+    `);
 
-  await db.runAsync(`
-    CREATE TABLE IF NOT EXISTS tbl_riwayat_harga (
-      id_riwayat INTEGER PRIMARY KEY AUTOINCREMENT,
-      kode_kontrakan TEXT NOT NULL,
-      harga_lama REAL NOT NULL,
-      harga_baru REAL NOT NULL,
-      tgl_berlaku DATE NOT NULL,
-      FOREIGN KEY (kode_kontrakan) REFERENCES tbl_kontrakan(kode_kontrakan) ON DELETE CASCADE
-    )
-  `);
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS tbl_riwayat_harga (
+        id_riwayat SERIAL PRIMARY KEY,
+        kode_kontrakan TEXT NOT NULL,
+        harga_lama NUMERIC NOT NULL,
+        harga_baru NUMERIC NOT NULL,
+        tgl_berlaku DATE NOT NULL,
+        FOREIGN KEY (kode_kontrakan) REFERENCES tbl_kontrakan(kode_kontrakan) ON DELETE CASCADE
+      )
+    `);
 
-  await db.runAsync(`
-    CREATE TABLE IF NOT EXISTS tbl_transaksi_pembayaran (
-      id_transaksi INTEGER PRIMARY KEY AUTOINCREMENT,
-      kode_kontrakan TEXT NOT NULL,
-      id_penyewa TEXT NOT NULL,
-      periode_bulan_tahun TEXT NOT NULL, -- Format YYYY-MM
-      status_pembayaran TEXT NOT NULL CHECK(status_pembayaran IN ('Lunas', 'Cicil', 'Belum Lunas')),
-      tgl_lunas DATE,
-      cicilan_1_rp REAL DEFAULT 0,
-      cicilan_2_rp REAL DEFAULT 0,
-      total_terbayar REAL NOT NULL DEFAULT 0,
-      harga_sewa_periode REAL NOT NULL,
-      catatan TEXT,
-      UNIQUE(kode_kontrakan, periode_bulan_tahun),
-      FOREIGN KEY (kode_kontrakan) REFERENCES tbl_kontrakan(kode_kontrakan) ON DELETE CASCADE,
-      FOREIGN KEY (id_penyewa) REFERENCES tbl_penyewa(id_penyewa) ON DELETE CASCADE
-    )
-  `);
+    await db.runAsync(`
+      CREATE TABLE IF NOT EXISTS tbl_transaksi_pembayaran (
+        id_transaksi SERIAL PRIMARY KEY,
+        kode_kontrakan TEXT NOT NULL,
+        id_penyewa TEXT NOT NULL,
+        periode_bulan_tahun TEXT NOT NULL,
+        status_pembayaran TEXT NOT NULL CHECK(status_pembayaran IN ('Lunas', 'Cicil', 'Belum Lunas')),
+        tgl_lunas DATE,
+        cicilan_1_rp NUMERIC DEFAULT 0,
+        cicilan_2_rp NUMERIC DEFAULT 0,
+        total_terbayar NUMERIC NOT NULL DEFAULT 0,
+        harga_sewa_periode NUMERIC NOT NULL,
+        catatan TEXT,
+        UNIQUE(kode_kontrakan, periode_bulan_tahun),
+        FOREIGN KEY (kode_kontrakan) REFERENCES tbl_kontrakan(kode_kontrakan) ON DELETE CASCADE,
+        FOREIGN KEY (id_penyewa) REFERENCES tbl_penyewa(id_penyewa) ON DELETE CASCADE
+      )
+    `);
 
-  console.log('Skema database berhasil diverifikasi/dibuat.');
+    console.log('Skema database PostgreSQL Supabase berhasil dibuat/diverifikasi.');
+  } catch (err) {
+    console.error('Gagal membuat skema:', err);
+  }
 };
 
 module.exports = {
