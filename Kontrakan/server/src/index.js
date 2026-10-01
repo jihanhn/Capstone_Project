@@ -18,21 +18,28 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routing API
+// Routing API (mendukung awalan /api dan langsung /xxx untuk Vercel Serverless)
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/dashboard', dashboardRoutes);
 app.use('/api/kontrakan', kontrakanRoutes);
+app.use('/kontrakan', kontrakanRoutes);
 app.use('/api/penyewa', penyewaRoutes);
+app.use('/penyewa', penyewaRoutes);
 app.use('/api/transaksi', transaksiRoutes);
+app.use('/transaksi', transaksiRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/export', exportRoutes);
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+const healthHandler = (req, res) => {
   res.json({
     status: 'online',
     system: 'Sistem Business Intelligence Pengelolaan Risiko Finansial Kontrakan Buti',
     timestamp: new Date().toISOString()
   });
-});
+};
+app.get('/api/health', healthHandler);
+app.get('/health', healthHandler);
 
 // Jika client sudah di-build, sajikan file statis
 const clientDistPath = path.resolve(__dirname, '../../client/dist');

@@ -1,5 +1,9 @@
 require('dotenv').config();
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// Parse PostgreSQL NUMERIC (OID 1700) dan BIGINT (OID 20) sebagai Number
+types.setTypeParser(1700, val => (val === null ? null : parseFloat(val)));
+types.setTypeParser(20, val => (val === null ? null : parseInt(val, 10)));
 
 // Mengambil URL koneksi otomatis dari Vercel/Supabase
 const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
