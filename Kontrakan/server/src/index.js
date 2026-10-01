@@ -49,16 +49,19 @@ app.get('*', (req, res) => {
   }
 });
 
-// Jalankan Server
-initDbSchema().then(() => {
-  app.listen(PORT, () => {
-    console.log(`====================================================`);
-    console.log(` Server BI Kontrakan Buti aktif pada port ${PORT}`);
-    console.log(` API Endpoint: http://localhost:${PORT}/api/health`);
-    console.log(`====================================================`);
+// Jalankan Server lokal jika bukan di serverless environment
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  initDbSchema().then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server BI Kontrakan Buti aktif pada port ${PORT}`);
+    });
+  }).catch(err => {
+    console.error('Inisialisasi database gagal:', err);
   });
-}).catch(err => {
-  console.error('Inisialisasi database gagal:', err);
-});
+} else {
+  // Di Vercel, pastikan skema diinisialisasi
+  initDbSchema().catch(err => console.error('Inisialisasi database Vercel error:', err));
+}
 
 module.exports = app;
+
