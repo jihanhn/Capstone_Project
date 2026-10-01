@@ -60,8 +60,7 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   });
 } else {
   // Di Vercel, pastikan skema diinisialisasi
-  initDbSchema().catch(err => console.error('Inisialisasi database Vercel error:', err));
+initDbSchema().catch(err => console.error('Gagal inisialisasi:', err));
 }
 
 module.exports = app;
-
