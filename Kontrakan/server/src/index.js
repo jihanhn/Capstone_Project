@@ -60,3 +60,5 @@ initDbSchema().then(() => {
 }).catch(err => {
   console.error('Inisialisasi database gagal:', err);
 });
+
+module.exports = app;
