@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "seed": "node src/database/seed.js"
+    "seed": "node src/database/seed.js",
+    "migrate:supabase": "node src/database/migrate_supabase.js"
   },
   "dependencies": {
     "@google/genai": "^2.25.0",
