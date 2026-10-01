@@ -1,0 +1,12 @@
+{
+  "name": "kontrakan-buti-bi",
+  "version": "1.0.0",
+  "description": "Sistem Business Intelligence Pengelolaan Risiko Finansial Kontrakan Buti",
+  "scripts": {
+    "start": "node server/src/index.js",
+    "seed": "node server/src/database/seed.js",
+    "build": "npm --prefix client run build",
+    "client": "npm --prefix client run dev",
+    "server": "npm --prefix server start"
+  }
+}
