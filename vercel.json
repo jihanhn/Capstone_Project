@@ -1,30 +1,18 @@
 {
-  "version": 2,
-  "builds": [
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "Kontrakan/client/dist",
+  "rewrites": [
     {
-      "src": "Kontrakan/server/src/index.js",
-      "use": "@vercel/node"
+      "source": "/api/(.*)",
+      "destination": "/api/index.js"
     },
     {
-      "src": "Kontrakan/client/package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api(?:/(.*))?",
-      "dest": "Kontrakan/server/src/index.js"
+      "source": "/api",
+      "destination": "/api/index.js"
     },
     {
-      "src": "/assets/(.*)",
-      "dest": "Kontrakan/client/dist/assets/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "Kontrakan/client/dist/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

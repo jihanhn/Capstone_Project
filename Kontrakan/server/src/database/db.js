@@ -8,11 +8,13 @@ types.setTypeParser(20, val => (val === null ? null : parseInt(val, 10)));
 // Mengambil URL koneksi otomatis dari Vercel/Supabase
 const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 
+if (!connectionString) {
+  console.warn('⚠️ WARNING: POSTGRES_URL atau DATABASE_URL belum diatur di Environment Variables!');
+}
+
 const pool = new Pool({
   connectionString: connectionString,
-  ssl: {
-    rejectUnauthorized: false // Diperlukan untuk koneksi aman ke Supabase
-  }
+  ssl: connectionString ? { rejectUnauthorized: false } : false
 });
 
 pool.on('connect', () => {

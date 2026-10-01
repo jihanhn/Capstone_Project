@@ -1,0 +1,14 @@
+{
+  "name": "kontrakan-buti-root",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "npm --prefix Kontrakan/client install && npm --prefix Kontrakan/client run build"
+  },
+  "dependencies": {
+    "@google/genai": "^2.25.0",
+    "cors": "^2.8.5",
+    "dotenv": "^18.0.5",
+    "express": "^4.21.2",
+    "pg": "^8.23.1"
+  }
+}
