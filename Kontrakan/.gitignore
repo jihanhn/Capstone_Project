@@ -1,0 +1,12 @@
+# Abaikan file environment & kredensial
+.env
+
+# Abaikan folder modul dan dependensi
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Abaikan file build / cache sistem
+dist/
+build/
+.DS_Store
