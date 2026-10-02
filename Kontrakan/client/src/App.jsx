@@ -53,14 +53,6 @@ export default function App() {
   return (
     <div className="flex h-screen bg-slate-100 font-sans antialiased overflow-hidden">
       
-      {/* TOMBOL LOGOUT DIPASANG DI SINI AGAR SELALU MUNCUL */}
-        <button
-      onClick={() => supabase.auth.signOut()}
-      className="px-5 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-sm font-bold fixed bottom-8 right-8 z-50 shadow-lg shadow-rose-500/30 transition-all hover:-translate-y-1"
-    >
-      Keluar (Logout)
-    </button>
-
       {/* Mobile Backdrop */}
       {sidebarOpen && (
         <div
@@ -170,6 +162,14 @@ export default function App() {
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               <span>Sistem Operasional</span>
             </div>
+            
+            {/* INI TOMBOL LOGOUT */}
+            <button
+              onClick={() => supabase.auth.signOut()}
+              className="flex items-center px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-500 hover:text-white border border-rose-200 rounded-xl text-xs font-semibold transition-colors"
+            >
+              Keluar
+            </button>
           </div>
         </header>
 
