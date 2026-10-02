@@ -76,7 +76,7 @@ export default function App() {
               </div>
               <div>
                 <h1 className="text-base font-extrabold tracking-tight text-white leading-tight">
-                  Kontrakan Buti
+                  Kontrakan Butiiiiiiii
                 </h1>
                 <span className="text-[10px] font-bold text-emerald-400 tracking-wider uppercase">
                   BI Risk Management
