@@ -106,7 +106,7 @@ export default function App() {
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
             </div>
             <div className="text-xs">
-              <div className="font-semibold text-slate-200">Database SQLite</div>
+              <div className="font-semibold text-slate-200">Database</div>
               <div className="text-[11px] text-emerald-400">Terhubung &bull; Aktif</div>
             </div>
           </div>
