@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'; // <-- Tambahan useEffect di sini
+import { supabase } from './utils/supabaseClient';
+import LoginView from './components/LoginView';
 import {
   LayoutDashboard,
   Receipt,
@@ -28,9 +30,37 @@ export default function App() {
     { id: 'penyewa', label: 'Master Data Penyewa', icon: Users },
     { id: 'laporan', label: 'Pelaporan & Ekspor', icon: FileBarChart },
   ];
+  
+  const [session, setSession] = useState(null);
+
+  useEffect(() => {
+    // Mengecek apakah sebelumnya sudah pernah login
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    // Memantau perubahan jika user login atau logout
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+  }, []);
+
+  // GEMBOK UTAMA: Jika tidak ada sesi (belum login), blokir dan tampilkan form
+  if (!session) {
+    return <LoginView onLoginSuccess={setSession} />;
+  }
 
   return (
     <div className="flex h-screen bg-slate-100 font-sans antialiased overflow-hidden">
+      
+      {/* TOMBOL LOGOUT DIPASANG DI SINI AGAR SELALU MUNCUL */}
+      <button
+        onClick={() => supabase.auth.signOut()}
+        className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-sm font-bold fixed top-4 right-4 z-50 shadow-md transition"
+      >
+        Keluar (Logout)
+      </button>
+
       {/* Mobile Backdrop */}
       {sidebarOpen && (
         <div
@@ -109,9 +139,6 @@ export default function App() {
               <div className="font-semibold text-slate-200">Database</div>
               <div className="text-[11px] text-emerald-400">Terhubung &bull; Aktif</div>
             </div>
-          </div>
-          <div className="text-[10px] text-slate-500 mt-2">
-            3-Tier Architecture &bull; Risk Engine S = L + C + T
           </div>
         </div>
       </aside>
