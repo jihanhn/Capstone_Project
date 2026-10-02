@@ -162,7 +162,6 @@ export default function App() {
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               <span>Sistem Operasional</span>
             </div>
-            
             {/* INI TOMBOL LOGOUT */}
             <button
               onClick={() => supabase.auth.signOut()}
