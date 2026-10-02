@@ -17,7 +17,6 @@ export default function LoginView({ onLoginSuccess }) {
       email,
       password,
     });
-
     if (error) {
       setErrorMsg('Email atau password salah!');
     } else {
