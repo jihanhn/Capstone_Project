@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
     "seed": "node src/database/seed.js",
     "migrate:supabase": "node src/database/migrate_supabase.js"
   },
@@ -13,7 +14,6 @@
     "cors": "^2.8.5",
     "dotenv": "^18.0.5",
     "express": "^4.21.2",
-    "pg": "^8.23.1",
-    "sqlite3": "^5.1.7"
+    "pg": "^8.23.1"
   }
 }

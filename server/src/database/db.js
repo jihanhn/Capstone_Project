@@ -1,11 +1,31 @@
-require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
+const dotenv = require('dotenv');
+
+// Muat konfigurasi .env
+const possibleEnvPaths = [
+  path.resolve(__dirname, '../../.env'),
+  path.resolve(__dirname, '../.env'),
+  path.resolve(__dirname, '../../../../.env'),
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), 'Kontrakan/.env'),
+  path.resolve(process.cwd(), 'Kontrakan/server/.env'),
+  path.resolve(process.cwd(), 'server/.env')
+];
+
+for (const envPath of possibleEnvPaths) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath, override: false });
+  }
+}
+
 const { Pool, types } = require('pg');
 
 // Parse PostgreSQL NUMERIC (OID 1700) dan BIGINT (OID 20) sebagai Number
 types.setTypeParser(1700, val => (val === null ? null : parseFloat(val)));
 types.setTypeParser(20, val => (val === null ? null : parseInt(val, 10)));
 
-// Mengambil URL koneksi otomatis dari Vercel/Supabase
+// Mengambil URL koneksi otomatis dari Supabase
 const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 
 if (!connectionString) {
@@ -14,15 +34,19 @@ if (!connectionString) {
 
 const pool = new Pool({
   connectionString: connectionString,
-  ssl: connectionString ? { rejectUnauthorized: false } : false
+  ssl: {
+    rejectUnauthorized: false
+  },
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000
 });
 
 pool.on('connect', () => {
-  console.log('Berhasil terhubung ke database PostgreSQL Supabase!');
+  console.log('✅ Berhasil terhubung ke database PostgreSQL Supabase!');
 });
 
 pool.on('error', (err) => {
-  console.error('Database connection error:', err);
+  console.error('❌ Database connection error pada Supabase:', err.message);
 });
 
 // Helper pintar untuk mengubah format parameter SQLite (?) menjadi PostgreSQL ($1, $2)
@@ -31,7 +55,7 @@ const convertQuery = (sql) => {
   return sql.replace(/\?/g, () => `$${index++}`);
 };
 
-// Helper Promise wrappers agar file routes Anda tidak perlu diubah sama sekali
+// Helper Promise wrappers untuk routes
 const db = {
   runAsync: async (sql, params = []) => {
     const res = await pool.query(convertQuery(sql), params);
@@ -39,17 +63,21 @@ const db = {
   },
   getAsync: async (sql, params = []) => {
     const res = await pool.query(convertQuery(sql), params);
-    return res.rows[0]; // Ambil baris pertama
+    return res.rows[0];
   },
   allAsync: async (sql, params = []) => {
     const res = await pool.query(convertQuery(sql), params);
-    return res.rows; // Ambil seluruh baris
+    return res.rows || [];
   }
 };
 
-// Inisialisasi skema tabel dengan dialek PostgreSQL
+// Inisialisasi skema tabel PostgreSQL Supabase
 const initDbSchema = async () => {
   try {
+    // Verifikasi koneksi awal
+    await pool.query('SELECT 1');
+    console.log('✅ Koneksi aktif ke Supabase PostgreSQL diverifikasi.');
+
     await db.runAsync(`
       CREATE TABLE IF NOT EXISTS tbl_kontrakan (
         kode_kontrakan TEXT PRIMARY KEY,
@@ -100,9 +128,16 @@ const initDbSchema = async () => {
       )
     `);
 
-    console.log('Skema database PostgreSQL Supabase berhasil dibuat/diverifikasi.');
+    // Pastikan sequence PostgreSQL selalu sinkron dengan MAX ID saat ini
+    await pool.query(`
+      SELECT setval('tbl_riwayat_harga_id_riwayat_seq', COALESCE((SELECT MAX(id_riwayat) FROM tbl_riwayat_harga), 0));
+      SELECT setval('tbl_transaksi_pembayaran_id_transaksi_seq', COALESCE((SELECT MAX(id_transaksi) FROM tbl_transaksi_pembayaran), 0));
+    `);
+
+    console.log('✅ Skema tabel database PostgreSQL Supabase siap dan lengkap.');
   } catch (err) {
-    console.error('Gagal membuat skema:', err);
+    console.error('❌ Gagal inisialisasi skema Supabase:', err.message);
+    throw err;
   }
 };
 

@@ -1,8 +1,15 @@
 {
-  "name": "kontrakan-buti-root",
+  "name": "kontrakan-buti-bi",
   "version": "1.0.0",
+  "description": "Sistem Business Intelligence Pengelolaan Risiko Finansial Kontrakan Buti",
+  "private": true,
   "scripts": {
-    "build": "npm --prefix Kontrakan/client install && npm --prefix Kontrakan/client run build"
+    "dev": "concurrently -k -n \"SERVER,CLIENT\" -c \"blue,green\" \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "start": "concurrently -k -n \"SERVER,CLIENT\" -c \"blue,green\" \"npm --prefix server start\" \"npm --prefix client run dev\"",
+    "client": "npm --prefix client run dev",
+    "server": "npm --prefix server run dev",
+    "seed": "npm --prefix server run seed",
+    "build": "npm --prefix client run build"
   },
   "dependencies": {
     "@google/genai": "^2.25.0",
@@ -10,5 +17,8 @@
     "dotenv": "^18.0.5",
     "express": "^4.21.2",
     "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
   }
 }

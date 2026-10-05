@@ -31,9 +31,10 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'ID, nama, no HP, dan tanggal mulai sewa wajib diisi' });
     }
 
+    const cleanTglSelesai = tgl_selesai_sewa && String(tgl_selesai_sewa).trim() !== '' ? tgl_selesai_sewa : null;
     await db.runAsync(
       'INSERT INTO tbl_penyewa (id_penyewa, nama_penyewa, no_hp, asal_ktp, tgl_mulai_sewa, tgl_selesai_sewa) VALUES (?, ?, ?, ?, ?, ?)',
-      [id_penyewa.toUpperCase().trim(), nama_penyewa.trim(), no_hp.trim(), asal_ktp ? asal_ktp.trim() : null, tgl_mulai_sewa, tgl_selesai_sewa || null]
+      [id_penyewa.toUpperCase().trim(), nama_penyewa.trim(), no_hp.trim(), asal_ktp ? asal_ktp.trim() : null, tgl_mulai_sewa, cleanTglSelesai]
     );
 
     res.status(201).json({ message: 'Penyewa berhasil ditambahkan' });
@@ -51,9 +52,19 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { nama_penyewa, no_hp, asal_ktp, tgl_mulai_sewa, tgl_selesai_sewa } = req.body;
 
+    const cleanTglSelesai = tgl_selesai_sewa && String(tgl_selesai_sewa).trim() !== '' ? tgl_selesai_sewa : null;
+    const cleanAsalKtp = asal_ktp && String(asal_ktp).trim() !== '' ? asal_ktp.trim() : null;
+
     await db.runAsync(
       'UPDATE tbl_penyewa SET nama_penyewa = ?, no_hp = ?, asal_ktp = ?, tgl_mulai_sewa = ?, tgl_selesai_sewa = ? WHERE id_penyewa = ?',
-      [nama_penyewa, no_hp, asal_ktp, tgl_mulai_sewa, tgl_selesai_sewa, id]
+      [
+        nama_penyewa ? String(nama_penyewa).trim() : '',
+        no_hp ? String(no_hp).trim() : '',
+        cleanAsalKtp,
+        tgl_mulai_sewa,
+        cleanTglSelesai,
+        id
+      ]
     );
 
     res.json({ message: 'Data penyewa berhasil diperbarui' });

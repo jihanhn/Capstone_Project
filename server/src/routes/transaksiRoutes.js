@@ -103,6 +103,8 @@ router.post('/', async (req, res) => {
     const c2 = Number(cicilan_2_rp) || 0;
     const total_terbayar = c1 + c2;
 
+    const cleanTglLunas = tgl_lunas && String(tgl_lunas).trim() !== '' ? tgl_lunas : null;
+
     const result = await db.runAsync(`
       INSERT INTO tbl_transaksi_pembayaran
       (kode_kontrakan, id_penyewa, periode_bulan_tahun, status_pembayaran, tgl_lunas, cicilan_1_rp, cicilan_2_rp, total_terbayar, harga_sewa_periode, catatan)
@@ -112,7 +114,7 @@ router.post('/', async (req, res) => {
       id_penyewa,
       periode_bulan_tahun,
       status_pembayaran,
-      tgl_lunas || null,
+      cleanTglLunas,
       c1,
       c2,
       total_terbayar,
@@ -148,6 +150,8 @@ router.put('/:id', async (req, res) => {
     const c2 = Number(cicilan_2_rp) || 0;
     const total_terbayar = c1 + c2;
 
+    const cleanTglLunas = tgl_lunas && String(tgl_lunas).trim() !== '' ? tgl_lunas : null;
+
     await db.runAsync(`
       UPDATE tbl_transaksi_pembayaran
       SET status_pembayaran = ?,
@@ -159,7 +163,7 @@ router.put('/:id', async (req, res) => {
       WHERE id_transaksi = ?
     `, [
       status_pembayaran,
-      tgl_lunas || null,
+      cleanTglLunas,
       c1,
       c2,
       total_terbayar,

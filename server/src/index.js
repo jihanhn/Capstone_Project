@@ -1,7 +1,25 @@
-require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
+const dotenv = require('dotenv');
+
+// Muat .env dari semua kemungkinan lokasi file
+const possibleEnvPaths = [
+  path.resolve(__dirname, '../../.env'),
+  path.resolve(__dirname, '../.env'),
+  path.resolve(__dirname, '../../../../.env'),
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(process.cwd(), 'Kontrakan/.env'),
+  path.resolve(process.cwd(), 'Kontrakan/server/.env'),
+  path.resolve(process.cwd(), 'server/.env')
+];
+for (const envPath of possibleEnvPaths) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath, override: false });
+  }
+}
+
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 const { initDbSchema } = require('./database/db');
 
 const dashboardRoutes = require('./routes/dashboardRoutes');
