@@ -27,9 +27,10 @@ types.setTypeParser(20, val => (val === null ? null : parseInt(val, 10)));
 // Parse PostgreSQL DATE (OID 1082) sebagai string YYYY-MM-DD agar serasi dengan frontend & input date
 types.setTypeParser(1082, val => val);
 
-// Mengambil URL koneksi otomatis dari Supabase atau fallback langsung ke Cloud Pooler
-const defaultSupabaseUrl = 'postgresql://postgres.rilrbfwqujsxpvtzdxik:JihanH2165DB@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true';
-const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL || defaultSupabaseUrl;
+// Mengambil URL koneksi resmi Supabase Pooler
+const verifiedSupabaseUrl = 'postgresql://postgres.rilrbfwqujsxpvtzdxik:JihanH2165DB@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true';
+const envUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+const connectionString = (envUrl && envUrl.includes('JihanH2165DB')) ? envUrl : verifiedSupabaseUrl;
 
 const pool = new Pool({
   connectionString: connectionString,

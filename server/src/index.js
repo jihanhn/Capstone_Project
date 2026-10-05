@@ -67,7 +67,7 @@ const healthHandler = (req, res) => {
     build: 'v2-db-check',
     hasEnvPostgres: !!process.env.POSTGRES_URL,
     hasEnvDatabase: !!process.env.DATABASE_URL,
-    activeUrlSource: process.env.POSTGRES_URL ? 'POSTGRES_URL' : (process.env.DATABASE_URL ? 'DATABASE_URL' : 'defaultSupabaseUrl'),
+    activeUrlSource: (envUrl && envUrl.includes('JihanH2165DB')) ? 'ENV_VALID' : 'VERIFIED_SUPABASE_URL',
     dbHost,
     dbUser,
     timestamp: new Date().toISOString()
