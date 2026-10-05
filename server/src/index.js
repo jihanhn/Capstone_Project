@@ -50,9 +50,26 @@ app.use('/export', exportRoutes);
 
 // Health check endpoint
 const healthHandler = (req, res) => {
+  const activeUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL || 'using_fallback';
+  let dbHost = 'none';
+  let dbUser = 'none';
+  try {
+    if (activeUrl !== 'using_fallback') {
+      const u = new URL(activeUrl);
+      dbHost = u.host;
+      dbUser = u.username;
+    }
+  } catch (e) {}
+
   res.json({
     status: 'online',
     system: 'Sistem Business Intelligence Pengelolaan Risiko Finansial Kontrakan Buti',
+    build: 'v2-db-check',
+    hasEnvPostgres: !!process.env.POSTGRES_URL,
+    hasEnvDatabase: !!process.env.DATABASE_URL,
+    activeUrlSource: process.env.POSTGRES_URL ? 'POSTGRES_URL' : (process.env.DATABASE_URL ? 'DATABASE_URL' : 'defaultSupabaseUrl'),
+    dbHost,
+    dbUser,
     timestamp: new Date().toISOString()
   });
 };
