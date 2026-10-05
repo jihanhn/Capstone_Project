@@ -50,12 +50,12 @@ app.use('/export', exportRoutes);
 
 // Health check endpoint
 const healthHandler = (req, res) => {
-  const activeUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL || 'using_fallback';
+  const envUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
   let dbHost = 'none';
   let dbUser = 'none';
   try {
-    if (activeUrl !== 'using_fallback') {
-      const u = new URL(activeUrl);
+    if (envUrl) {
+      const u = new URL(envUrl);
       dbHost = u.host;
       dbUser = u.username;
     }
@@ -64,7 +64,7 @@ const healthHandler = (req, res) => {
   res.json({
     status: 'online',
     system: 'Sistem Business Intelligence Pengelolaan Risiko Finansial Kontrakan Buti',
-    build: 'v2-db-check',
+    build: 'v3-db-fixed',
     hasEnvPostgres: !!process.env.POSTGRES_URL,
     hasEnvDatabase: !!process.env.DATABASE_URL,
     activeUrlSource: (envUrl && envUrl.includes('JihanH2165DB')) ? 'ENV_VALID' : 'VERIFIED_SUPABASE_URL',
