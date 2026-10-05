@@ -24,13 +24,12 @@ const { Pool, types } = require('pg');
 // Parse PostgreSQL NUMERIC (OID 1700) dan BIGINT (OID 20) sebagai Number
 types.setTypeParser(1700, val => (val === null ? null : parseFloat(val)));
 types.setTypeParser(20, val => (val === null ? null : parseInt(val, 10)));
+// Parse PostgreSQL DATE (OID 1082) sebagai string YYYY-MM-DD agar serasi dengan frontend & input date
+types.setTypeParser(1082, val => val);
 
-// Mengambil URL koneksi otomatis dari Supabase
-const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
-
-if (!connectionString) {
-  console.warn('⚠️ WARNING: POSTGRES_URL atau DATABASE_URL belum diatur di Environment Variables!');
-}
+// Mengambil URL koneksi otomatis dari Supabase atau fallback langsung ke Cloud Pooler
+const defaultSupabaseUrl = 'postgresql://postgres.rilrbfwqujsxpvtzdxik:JihanH2165DB@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres?pgbouncer=true';
+const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL || defaultSupabaseUrl;
 
 const pool = new Pool({
   connectionString: connectionString,
@@ -130,8 +129,8 @@ const initDbSchema = async () => {
 
     // Pastikan sequence PostgreSQL selalu sinkron dengan MAX ID saat ini
     await pool.query(`
-      SELECT setval('tbl_riwayat_harga_id_riwayat_seq', COALESCE((SELECT MAX(id_riwayat) FROM tbl_riwayat_harga), 0));
-      SELECT setval('tbl_transaksi_pembayaran_id_transaksi_seq', COALESCE((SELECT MAX(id_transaksi) FROM tbl_transaksi_pembayaran), 0));
+      SELECT setval('tbl_riwayat_harga_id_riwayat_seq', GREATEST(COALESCE((SELECT MAX(id_riwayat) FROM tbl_riwayat_harga), 1), 1));
+      SELECT setval('tbl_transaksi_pembayaran_id_transaksi_seq', GREATEST(COALESCE((SELECT MAX(id_transaksi) FROM tbl_transaksi_pembayaran), 1), 1));
     `);
 
     console.log('✅ Skema tabel database PostgreSQL Supabase siap dan lengkap.');
