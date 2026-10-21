@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, MessageSquare, AlertTriangle, ShieldAlert, FileText, CheckCircle2 } from 'lucide-react';
-import { formatRupiah, generateWhatsAppLink } from '../utils/formatters';
+import { formatRupiah, generateWhatsAppLink } from '../../utils/formatters';
+import { showToast } from '../../utils/toast';
 
 export default function MitigasiModal({ warning, onClose }) {
   if (!warning) return null;
@@ -8,7 +9,29 @@ export default function MitigasiModal({ warning, onClose }) {
   const [activeTab, setActiveTab] = useState('detail');
   const [copied, setCopied] = useState(false);
 
-  const spTemplate = `SURAT PERINGATAN (SP) PENYEWA KONTRAKAN BUTI
+  const dueDay = warning.dueDay || warning.breakdown?.dueDay || 5;
+  const isPaid = (parseFloat(warning.sisa_tagihan) || 0) <= 0;
+
+  const spTemplate = isPaid
+    ? `KONFIRMASI PELUNASAN & PENGINGAT SEWA KONTRAKAN BUTI
+Periode: ${warning.periode}
+Nomor Unit: ${warning.nama_kontrakan} (${warning.kode_kontrakan})
+
+Kepada Yth.
+Bapak/Ibu: ${warning.nama_penyewa}
+
+Dengan hormat,
+Kami mengonfirmasi bahwa pembayaran sewa hunian Anda untuk periode ${warning.periode} telah lunas dengan rincian:
+- Total Tarif Sewa : ${formatRupiah(warning.harga_sewa_periode)}
+- Total Terbayar   : ${formatRupiah(warning.total_terbayar)}
+- Sisa Tagihan     : Rp 0 (LUNAS)
+- Tanggal Jatuh Tempo : Setiap Tanggal ${dueDay}
+
+Terima kasih atas pelunasannya. Sebagai pengingat ramah untuk periode bulan berikutnya, mohon agar pembayaran dapat dilakukan tepat waktu sebelum tanggal ${dueDay} demi kenyamanan bersama.
+
+Hormat kami,
+Pengelola Kontrakan Buti`
+    : `SURAT PERINGATAN (SP) PENYEWA KONTRAKAN BUTI
 Nomor: SP/${warning.periode}/${warning.kode_kontrakan}
 
 Kepada Yth.
@@ -20,7 +43,7 @@ Berdasarkan data sistem pembukuan Kontrakan Buti, kami mencatat kewajiban sewa h
 - Total Tarif Sewa : ${formatRupiah(warning.harga_sewa_periode)}
 - Total Terbayar   : ${formatRupiah(warning.total_terbayar)}
 - Sisa Tunggakan   : ${formatRupiah(warning.sisa_tagihan)}
-- Status           : ${warning.status_pembayaran} (${warning.kategori} Risk - Keterlambatan: ${warning.breakdown?.lagDays || 0} hari)
+- Status           : ${warning.status_pembayaran} (${warning.kategori} Risk - Keterlambatan: ${warning.breakdown?.lagDays || 0} hari dari Tgl ${dueDay})
 
 Sehubungan dengan hal tersebut, kami mengimbau agar pelunasan tunggakan diselesaikan selambat-lambatnya 3x24 jam sejak surat ini diterbitkan.
 
@@ -30,6 +53,7 @@ Pengelola Kontrakan Buti`;
   const copySP = () => {
     navigator.clipboard.writeText(spTemplate);
     setCopied(true);
+    showToast('success', isPaid ? 'Draf surat konfirmasi pelunasan disalin ke clipboard!' : 'Draf teks Surat Peringatan (SP) disalin ke clipboard!');
     setTimeout(() => setCopied(false), 2500);
   };
 
@@ -39,7 +63,9 @@ Pengelola Kontrakan Buti`;
     warning.nama_kontrakan,
     warning.periode,
     warning.sisa_tagihan,
-    warning.kategori
+    warning.kategori,
+    warning.breakdown?.lagDays,
+    dueDay
   );
 
   return (
@@ -117,7 +143,7 @@ Pengelola Kontrakan Buti`;
                   <div className="text-lg font-bold text-slate-800 mt-2">
                     {warning.breakdown?.lagDays || 0} Hari
                   </div>
-                  <div className="text-xs text-slate-500">Jatuh Tempo: Tgl 5</div>
+                  <div className="text-xs text-slate-500">Jatuh Tempo: Tgl {dueDay}</div>
                 </div>
               </div>
 

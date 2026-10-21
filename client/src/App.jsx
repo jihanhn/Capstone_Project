@@ -1,188 +1,444 @@
-import React, { useState, useEffect } from 'react'; // <-- Tambahan useEffect di sini
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './utils/supabaseClient';
-import LoginView from './components/LoginView';
-import {
-  LayoutDashboard,
-  Receipt,
-  Building2,
-  Users,
-  FileBarChart,
-  Home,
-  Database,
-  Menu,
-  X,
-  Calendar
-} from 'lucide-react';
-import DashboardView from './components/DashboardView';
-import TransaksiView from './components/TransaksiView';
-import KontrakanView from './components/KontrakanView';
-import PenyewaView from './components/PenyewaView';
-import LaporanView from './components/LaporanView';
+import { formatRupiah } from './utils/formatters';
+import { showToast } from './utils/toast';
+
+// Views
+import LoginView from './views/LoginView';
+import DashboardView from './views/DashboardView';
+import KontrakanView from './views/KontrakanView';
+import PenyewaView from './views/PenyewaView';
+import TransaksiView from './views/TransaksiView';
+import BiayaView from './views/BiayaView'; 
+import LaporanView from './views/LaporanView';
+import PengaturanView from './views/PengaturanView'; 
+
+// Layout Components
+import Sidebar from './components/layout/Sidebar';
+import Navbar from './components/layout/Navbar';
+
+// Modals & Notifications
+import ProfileModal from './components/modals/ProfileModal';
+import PanduanModal from './components/modals/PanduanModal';
+import LogoutModal from './components/modals/LogoutModal';
+import ToastContainer from './components/common/ToastContainer';
+
+const DEFAULT_USER = {
+  id: 'USR-001',
+  nama: 'Admin Buti',
+  username: 'admin',
+  email: 'admin@kontrakan.com',
+  role: 'Super Admin',
+  jabatan: 'Pengelola Utama',
+  no_hp: '0812-3456-7890',
+  avatarColor: 'emerald'
+};
+
+const AVATAR_GRADIENTS = {
+  emerald: 'from-emerald-600 to-teal-500',
+  blue: 'from-blue-600 to-cyan-500',
+  indigo: 'from-indigo-600 to-purple-500',
+  rose: 'from-rose-600 to-pink-500',
+  amber: 'from-amber-600 to-orange-500',
+  slate: 'from-slate-700 to-slate-900',
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const navItems = [
-    { id: 'dashboard', label: 'Executive Dashboard', icon: LayoutDashboard },
-    { id: 'transaksi', label: 'Pencatatan Transaksi', icon: Receipt },
-    { id: 'kontrakan', label: 'Master Unit Kontrakan', icon: Building2 },
-    { id: 'penyewa', label: 'Master Data Penyewa', icon: Users },
-    { id: 'laporan', label: 'Pelaporan & Ekspor', icon: FileBarChart },
-  ];
+  const [pengaturanTab, setPengaturanTab] = useState('profil');
   
-  const [session, setSession] = useState(null);
+  // Real-time Date & Clock State
+  const [currentDateTime, setCurrentDateTime] = useState(new Date());
 
   useEffect(() => {
-    // Mengecek apakah sebelumnya sudah pernah login
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-    });
-
-    // Memantau perubahan jika user login atau logout
-    supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
+    const timer = setInterval(() => {
+      setCurrentDateTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
   }, []);
 
-  // GEMBOK UTAMA: Jika tidak ada sesi (belum login), blokir dan tampilkan form
-  if (!session) {
-    return <LoginView onLoginSuccess={setSession} />;
+  const formattedDate = currentDateTime.toLocaleDateString('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+
+  const formattedTime = currentDateTime.toLocaleTimeString('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  // Auth & User State
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    const saved = localStorage.getItem('kb_auth_logged_in');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const [session, setSession] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kb_currentUser');
+      return saved ? JSON.parse(saved) : DEFAULT_USER;
+    } catch {
+      return DEFAULT_USER;
+    }
+  });
+
+  // Profil Usaha
+  const [namaUsaha, setNamaUsaha] = useState('Kontrakan Buti');
+
+  // Modal States
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showPanduanModal, setShowPanduanModal] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+
+  // Popover State
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showMobileSearch, setShowMobileSearch] = useState(false);
+
+  // Global filters
+  const [globalFilterPenyewa, setGlobalFilterPenyewa] = useState('');
+  const [globalFilterUnit, setGlobalFilterUnit] = useState('');
+  const [globalFilterTrxUnit, setGlobalFilterTrxUnit] = useState('');
+  const [globalFilterTrxStatus, setGlobalFilterTrxStatus] = useState('');
+
+  // Refs untuk Click Outside
+  const searchRef = useRef(null);
+  const profileRef = useRef(null);
+
+  // Load Nama Usaha dari localStorage
+  useEffect(() => {
+    try {
+      const savedProfil = localStorage.getItem('kb_profil');
+      if (savedProfil) {
+        const p = JSON.parse(savedProfil);
+        if (p.nama) setNamaUsaha(p.nama);
+      }
+    } catch (e) {
+      console.warn('Gagal membaca profil:', e);
+    }
+
+    const handleProfilUpdated = (e) => {
+      if (e.detail?.nama) setNamaUsaha(e.detail.nama);
+    };
+    window.addEventListener('kb_profil_updated', handleProfilUpdated);
+    return () => window.removeEventListener('kb_profil_updated', handleProfilUpdated);
+  }, []);
+
+  // Click Outside Listener
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (searchRef.current && !searchRef.current.contains(e.target)) {
+        setSearchResults([]);
+      }
+      if (profileRef.current && !profileRef.current.contains(e.target)) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setShowProfileMenu(false);
+        setSearchResults([]);
+        setShowMobileSearch(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  const handleSaveCurrentUser = (updatedUser) => {
+    setCurrentUser(updatedUser);
+    localStorage.setItem('kb_currentUser', JSON.stringify(updatedUser));
+    
+    try {
+      const savedUsers = localStorage.getItem('kb_users_list');
+      if (savedUsers) {
+        const list = JSON.parse(savedUsers);
+        const updatedList = list.map(u => u.id === updatedUser.id ? { ...u, ...updatedUser } : u);
+        localStorage.setItem('kb_users_list', JSON.stringify(updatedList));
+      }
+      showToast('success', 'Profil pengguna berhasil diperbarui!');
+    } catch (e) {
+      console.warn(e);
+      showToast('error', 'Gagal memperbarui profil pengguna');
+    }
+  };
+
+  const handleSearch = async (e) => {
+    const query = e.target.value;
+    setSearchQuery(query);
+    
+    if (query.trim().length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const [resPenyewa, resUnit, resTrx] = await Promise.all([
+        fetch('/api/penyewa').then(r => r.json()).catch(() => []),
+        fetch('/api/kontrakan').then(r => r.json()).catch(() => []),
+        fetch('/api/transaksi').then(r => r.json()).catch(() => [])
+      ]);
+
+      let results = [];
+      const q = query.toLowerCase();
+
+      resPenyewa.forEach(p => {
+        if (
+          (p.nama_penyewa && p.nama_penyewa.toLowerCase().includes(q)) ||
+          (p.id_penyewa && p.id_penyewa.toLowerCase().includes(q)) ||
+          (p.no_hp && p.no_hp.includes(q))
+        ) {
+          results.push({
+            type: 'penyewa',
+            id: p.id_penyewa,
+            title: p.nama_penyewa,
+            subtitle: p.status_berjalan === 'Aktif' ? `Penyewa Aktif (Unit: ${p.kode_unit_sekarang || '-'})` : 'Penyewa Tidak Aktif',
+            badge: 'Penyewa'
+          });
+        }
+      });
+
+      resUnit.forEach(u => {
+        if (
+          (u.kode_kontrakan && u.kode_kontrakan.toLowerCase().includes(q)) ||
+          (u.nama_kontrakan && u.nama_kontrakan.toLowerCase().includes(q))
+        ) {
+          results.push({
+            type: 'unit',
+            id: u.kode_kontrakan,
+            title: `Unit ${u.kode_kontrakan} - ${u.nama_kontrakan}`,
+            subtitle: `Tarif: ${formatRupiah(u.harga_saat_ini)} | Status: ${u.status_realtime || u.status_unit}`,
+            badge: 'Properti'
+          });
+        }
+      });
+
+      resTrx.forEach(t => {
+        if (
+          (t.nama_penyewa && t.nama_penyewa.toLowerCase().includes(q)) ||
+          (t.kode_kontrakan && t.kode_kontrakan.toLowerCase().includes(q)) ||
+          (t.periode_bulan_tahun && t.periode_bulan_tahun.includes(q))
+        ) {
+          results.push({
+            type: 'transaksi',
+            id: `trx-${t.id_transaksi}`,
+            title: `Pembayaran ${t.kode_kontrakan} (${t.periode_bulan_tahun})`,
+            subtitle: `${t.nama_penyewa} • ${t.status_pembayaran} • ${formatRupiah(t.total_terbayar)}`,
+            badge: 'Transaksi'
+          });
+        }
+      });
+
+      setSearchResults(results.slice(0, 8));
+    } catch (err) {
+      console.error('Gagal mencari data:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSelectSearchResult = (item) => {
+    if (item.type === 'penyewa') {
+      setGlobalFilterPenyewa(item.title);
+      setActiveTab('penyewa');
+    } else if (item.type === 'unit') {
+      setGlobalFilterUnit(item.id);
+      setActiveTab('kontrakan');
+    } else if (item.type === 'transaksi') {
+      const unitCode = item.title.split(' ')[1] || '';
+      setGlobalFilterTrxUnit(unitCode);
+      setActiveTab('transaksi');
+    }
+    setSearchQuery('');
+    setSearchResults([]);
+    setShowMobileSearch(false);
+  };
+
+  const handleConfirmLogout = async () => {
+    setShowLogoutModal(false);
+    setShowProfileMenu(false);
+    localStorage.setItem('kb_auth_logged_in', 'false');
+    setIsLoggedIn(false);
+    setSession(null);
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('Signout supabase:', e);
+    }
+  };
+
+  const handleLoginSuccess = (newSession, userMetadata) => {
+    setSession(newSession);
+    setIsLoggedIn(true);
+    localStorage.setItem('kb_auth_logged_in', 'true');
+    if (userMetadata) {
+      handleSaveCurrentUser({ ...currentUser, ...userMetadata });
+    }
+    setActiveTab('dashboard');
+  };
+
+  const navigateToPengaturan = (subTab) => {
+    setPengaturanTab(subTab);
+    setActiveTab('pengaturan');
+    setShowProfileMenu(false);
+  };
+
+  const renderActiveTab = () => {
+    switch (activeTab) {
+      case 'dashboard': return <DashboardView />;
+      case 'kontrakan': 
+        return <KontrakanView 
+                  initialSearchQuery={globalFilterUnit} 
+                  onSearchClear={() => setGlobalFilterUnit('')} 
+               />;
+      case 'penyewa': 
+        return <PenyewaView 
+                  initialSearchQuery={globalFilterPenyewa} 
+                  onSearchClear={() => setGlobalFilterPenyewa('')} 
+               />;
+      case 'transaksi': 
+        return <TransaksiView 
+                  initialFilterUnit={globalFilterTrxUnit}
+                  initialFilterStatus={globalFilterTrxStatus}
+                  onFilterClear={() => {
+                    setGlobalFilterTrxUnit('');
+                    setGlobalFilterTrxStatus('');
+                  }}
+               />;
+      case 'biaya': return <BiayaView />;
+      case 'laporan': return <LaporanView />;
+      case 'pengaturan': 
+        return <PengaturanView 
+                  initialTab={pengaturanTab}
+                  onTabChange={(tab) => setPengaturanTab(tab)}
+                  currentUser={currentUser}
+                  onUserUpdate={handleSaveCurrentUser}
+               />;
+      default: return <DashboardView />;
+    }
+  };
+
+  if (!isLoggedIn) {
+    return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
 
+  const userInitial = currentUser.nama ? currentUser.nama.charAt(0).toUpperCase() : 'A';
+  const avatarGradient = AVATAR_GRADIENTS[currentUser.avatarColor] || AVATAR_GRADIENTS.emerald;
+
   return (
-    <div className="flex h-screen bg-slate-100 font-sans antialiased overflow-hidden">
-      
-      {/* Mobile Backdrop */}
-      {sidebarOpen && (
-        <div
-          onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden"
-        />
-      )}
-
+    <div className="flex h-screen bg-slate-50 font-sans antialiased overflow-hidden">
       {/* SIDEBAR NAVIGATION */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 bg-slate-900 text-white flex flex-col justify-between transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-auto ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        <div>
-          {/* Logo Brand */}
-          <div className="p-6 border-b border-slate-800 flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="p-2.5 bg-gradient-to-tr from-emerald-600 to-emerald-400 rounded-2xl shadow-lg shadow-emerald-900/30">
-                <Building2 className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-base font-extrabold tracking-tight text-white leading-tight">
-                  Kontrakan Butiiiiiiii
-                </h1>
-                <span className="text-[10px] font-bold text-emerald-400 tracking-wider uppercase">
-                  BI Risk Management
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={() => setSidebarOpen(false)}
-              className="p-1 rounded-lg text-slate-400 hover:text-white lg:hidden"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        sidebarOpen={sidebarOpen}
+        setSidebarOpen={setSidebarOpen}
+        namaUsaha={namaUsaha}
+        currentUser={currentUser}
+        userInitial={userInitial}
+        avatarGradient={avatarGradient}
+        onLogoutClick={() => setShowLogoutModal(true)}
+        onNavClick={() => {
+          setGlobalFilterPenyewa('');
+          setGlobalFilterUnit('');
+          setGlobalFilterTrxUnit('');
+        }}
+      />
 
-          {/* Navigation Links */}
-          <nav className="p-4 space-y-1.5">
-            <div className="px-3 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              Menu Utama
-            </div>
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    setActiveTab(item.id);
-                    setSidebarOpen(false);
-                  }}
-                  className={`w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all ${
-                    isActive
-                      ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/25'
-                      : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
-                  }`}
-                >
-                  <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* System Info Bottom Card */}
-        <div className="p-4 border-t border-slate-800 m-3 bg-slate-800/50 rounded-2xl">
-          <div className="flex items-center space-x-2.5">
-            <div className="relative">
-              <Database className="w-4 h-4 text-emerald-400" />
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            </div>
-            <div className="text-xs">
-              <div className="font-semibold text-slate-200">Database</div>
-              <div className="text-[11px] text-emerald-400">Terhubung &bull; Aktif</div>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {/* MAIN CONTENT AREA */}
+      {/* MAIN CONTENT WRAPPER */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top Navbar */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 z-10 flex-shrink-0">
-          <div className="flex items-center space-x-3">
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="p-2 text-slate-500 hover:text-slate-700 rounded-lg lg:hidden"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <div className="flex items-center space-x-2">
-              <h2 className="text-base font-bold text-slate-800 capitalize">
-                {navItems.find((n) => n.id === activeTab)?.label}
-              </h2>
+        {/* NAVBAR */}
+        <Navbar
+          onOpenSidebar={() => setSidebarOpen(true)}
+          searchRef={searchRef}
+          searchQuery={searchQuery}
+          handleSearch={handleSearch}
+          setSearchQuery={setSearchQuery}
+          setSearchResults={setSearchResults}
+          isSearching={isSearching}
+          searchResults={searchResults}
+          handleSelectSearchResult={handleSelectSearchResult}
+          showMobileSearch={showMobileSearch}
+          setShowMobileSearch={setShowMobileSearch}
+          formattedDate={formattedDate}
+          formattedTime={formattedTime}
+          profileRef={profileRef}
+          showProfileMenu={showProfileMenu}
+          setShowProfileMenu={setShowProfileMenu}
+          avatarGradient={avatarGradient}
+          userInitial={userInitial}
+          currentUser={currentUser}
+          onOpenProfileModal={() => setShowProfileModal(true)}
+          onOpenPanduanModal={() => setShowPanduanModal(true)}
+          onOpenLogoutModal={() => setShowLogoutModal(true)}
+          navigateToPengaturan={navigateToPengaturan}
+        />
+
+        {/* MOBILE SEARCH EXPANSION */}
+        {showMobileSearch && (
+          <div className="bg-white border-b border-slate-200 p-3 md:hidden z-10 shadow-sm animate-in slide-in-from-top-2">
+            <div className="flex items-center bg-slate-100 rounded-xl px-3 py-2 border border-slate-200">
+              <input 
+                type="text" 
+                placeholder="Cari penyewa, unit, dll..." 
+                value={searchQuery}
+                onChange={handleSearch}
+                autoFocus
+                className="bg-transparent border-none outline-none text-xs text-slate-800 w-full"
+              />
+              <button onClick={() => setShowMobileSearch(false)} className="text-slate-400">
+                ✕
+              </button>
             </div>
           </div>
+        )}
 
-          <div className="flex items-center space-x-3">
-            <div className="hidden sm:flex items-center space-x-1.5 text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-              <Calendar className="w-3.5 h-3.5 text-slate-400" />
-              <span>{new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
-            </div>
-            <div className="flex items-center space-x-2 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-xl text-xs font-semibold border border-emerald-100">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>Sistem Operasional</span>
-            </div>
-            {/* INI TOMBOL LOGOUT */}
-            <button
-              onClick={() => supabase.auth.signOut()}
-              className="flex items-center px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-500 hover:text-white border border-rose-200 rounded-xl text-xs font-semibold transition-colors"
-            >
-              Keluar
-            </button>
-          </div>
-        </header>
-
-        {/* Scrollable View Container */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+        {/* MAIN BODY AREA */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-50/60">
           <div className="max-w-7xl mx-auto">
-            {activeTab === 'dashboard' && <DashboardView />}
-            {activeTab === 'transaksi' && <TransaksiView />}
-            {activeTab === 'kontrakan' && <KontrakanView />}
-            {activeTab === 'penyewa' && <PenyewaView />}
-            {activeTab === 'laporan' && <LaporanView />}
+            {renderActiveTab()}
           </div>
         </main>
       </div>
+
+      {/* MODALS */}
+      <ProfileModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        currentUser={currentUser}
+        onSave={handleSaveCurrentUser}
+      />
+
+      <PanduanModal
+        isOpen={showPanduanModal}
+        onClose={() => setShowPanduanModal(false)}
+      />
+
+      <LogoutModal
+        isOpen={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={handleConfirmLogout}
+      />
+
+      {/* GLOBAL TOAST NOTIFICATIONS */}
+      <ToastContainer />
     </div>
   );
 }

@@ -1,28 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Printer, Calendar, FileText, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 import { formatRupiah, formatTanggal } from '../utils/formatters';
+import { showToast } from '../utils/toast';
 
 export default function LaporanView() {
-  const [selectedYear, setSelectedYear] = useState('2026');
-  const [selectedMonth, setSelectedMonth] = useState('09');
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+
+  // Filters State
+  const [filterPeriode, setFilterPeriode] = useState(`${currentYear}-${currentMonth}`);
+  const [filterTahun, setFilterTahun] = useState(currentYear.toString());
   const [allYear, setAllYear] = useState(false);
+
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const periode = allYear ? '' : `${selectedYear}-${selectedMonth}`;
+  // Menghasilkan daftar tahun secara otomatis (dari 5 tahun lalu hingga 5 tahun ke depan)
+  const yearList = Array.from(new Array(11), (val, index) => currentYear + 5 - index);
 
   const fetchLaporan = async () => {
     setLoading(true);
     try {
       let url = `/api/transaksi?`;
-      if (!allYear && periode) {
-        url += `periode=${periode}&`;
+      if (!allYear && filterPeriode) {
+        url += `periode=${filterPeriode}&`;
       }
       const res = await fetch(url);
       let items = await res.json();
 
       if (allYear) {
-        items = items.filter(t => t.periode_bulan_tahun.startsWith(selectedYear));
+        items = items.filter(t => t.periode_bulan_tahun.startsWith(filterTahun));
       }
 
       setData(items || []);
@@ -35,7 +43,7 @@ export default function LaporanView() {
 
   useEffect(() => {
     fetchLaporan();
-  }, [selectedYear, selectedMonth, allYear]);
+  }, [filterPeriode, filterTahun, allYear]);
 
   // Agregasi
   const totalPotensi = data.reduce((acc, curr) => acc + (curr.harga_sewa_periode || 0), 0);
@@ -46,10 +54,11 @@ export default function LaporanView() {
   const handleExportCsv = () => {
     let url = '/api/export/csv?';
     if (allYear) {
-      url += `tahun=${selectedYear}`;
+      url += `tahun=${filterTahun}`;
     } else {
-      url += `periode=${periode}`;
+      url += `periode=${filterPeriode}`;
     }
+    showToast('info', 'Laporan keuangan sedang diunduh dalam format CSV.');
     window.open(url, '_blank');
   };
 
@@ -57,23 +66,8 @@ export default function LaporanView() {
     window.print();
   };
 
-  const monthNames = [
-    { num: '01', name: 'Januari' },
-    { num: '02', name: 'Februari' },
-    { num: '03', name: 'Maret' },
-    { num: '04', name: 'April' },
-    { num: '05', name: 'Mei' },
-    { num: '06', name: 'Juni' },
-    { num: '07', name: 'Juli' },
-    { num: '08', name: 'Agustus' },
-    { num: '09', name: 'September' },
-    { num: '10', name: 'Oktober' },
-    { num: '11', name: 'November' },
-    { num: '12', name: 'Desember' },
-  ];
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-in fade-in duration-300">
       {/* Header & Export Actions */}
       <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4 no-print">
         <div>
@@ -102,50 +96,47 @@ export default function LaporanView() {
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-wrap items-center gap-4 no-print">
+      {/* Filter Bar Cerdas */}
+      <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-wrap items-center gap-6 no-print">
         <div className="flex items-center space-x-2">
           <input
             type="checkbox"
             id="allYearCheck"
             checked={allYear}
             onChange={(e) => setAllYear(e.target.checked)}
-            className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+            className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
           />
-          <label htmlFor="allYearCheck" className="text-sm font-semibold text-slate-700 cursor-pointer">
+          <label htmlFor="allYearCheck" className="text-sm font-semibold text-slate-700 cursor-pointer select-none">
             Rekap 1 Tahun Penuh
           </label>
         </div>
 
-        {!allYear && (
-          <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-sm">
-            <span className="text-xs text-slate-500 font-medium">Bulan:</span>
+        {/* Jika checkbox 'Rekap 1 Tahun Penuh' TIDAK dicentang -> Tampilkan Kalender Bulan (YYYY-MM) */}
+        {!allYear ? (
+          <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+            <span className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Periode:</span>
+            <input
+              type="month"
+              value={filterPeriode}
+              onChange={(e) => setFilterPeriode(e.target.value)}
+              className="bg-transparent font-medium text-slate-800 outline-none w-36 cursor-pointer"
+            />
+          </div>
+        ) : (
+          /* Jika checkbox 'Rekap 1 Tahun Penuh' DICENTANG -> Tampilkan Dropdown Tahun Dinamis */
+          <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+            <span className="text-xs text-slate-500 font-semibold uppercase tracking-wider">Tahun:</span>
             <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="bg-transparent font-medium text-slate-700 outline-none"
+              value={filterTahun}
+              onChange={(e) => setFilterTahun(e.target.value)}
+              className="bg-transparent font-medium text-slate-800 outline-none w-36 cursor-pointer"
             >
-              {monthNames.map((m) => (
-                <option key={m.num} value={m.num}>
-                  {m.name}
-                </option>
+              {yearList.map((y) => (
+                <option key={y} value={y}>{y}</option>
               ))}
             </select>
           </div>
         )}
-
-        <div className="flex items-center space-x-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-sm">
-          <span className="text-xs text-slate-500 font-medium">Tahun:</span>
-          <select
-            value={selectedYear}
-            onChange={(e) => setSelectedYear(e.target.value)}
-            className="bg-transparent font-medium text-slate-700 outline-none"
-          >
-            <option value="2026">2026</option>
-            <option value="2025">2025</option>
-            <option value="2024">2024</option>
-          </select>
-        </div>
       </div>
 
       {/* Printable Report View */}
@@ -155,7 +146,7 @@ export default function LaporanView() {
             <h1 className="text-2xl font-extrabold text-slate-900">REKAPITULASI KEUANGAN &amp; RISIKO</h1>
             <p className="text-xs text-slate-500 font-medium mt-1">
               Usaha Sewa Hunian Kontrakan Buti &bull; Periode:{' '}
-              <span className="font-bold text-slate-800">{allYear ? `Tahun Penuh ${selectedYear}` : periode}</span>
+              <span className="font-bold text-slate-800">{allYear ? `Tahun Penuh ${filterTahun}` : filterPeriode}</span>
             </p>
           </div>
           <div className="text-right text-xs text-slate-400">
@@ -215,10 +206,10 @@ export default function LaporanView() {
                   <td className="p-2.5 text-rose-600 font-semibold">{formatRupiah(item.sisa_tagihan)}</td>
                   <td className="p-2.5 font-semibold">{item.status_pembayaran}</td>
                   <td className="p-2.5">{formatTanggal(item.tgl_lunas)}</td>
-                  <td className="p-2.5 font-mono font-bold">{item.riskScore}</td>
+                  <td className="p-2.5 font-mono font-bold text-center">{item.riskScore}</td>
                   <td className="p-2.5">
                     <span
-                      className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                      className={`px-2 py-0.5 rounded font-bold text-[10px] uppercase tracking-wide ${
                         item.kategoriRisiko === 'High'
                           ? 'bg-rose-100 text-rose-800'
                           : item.kategoriRisiko === 'Medium'
