@@ -85,7 +85,7 @@ export default function VacancyLossModal({ unit, onClose }) {
                 {formatRupiah(hargaBulan)}
               </div>
               <span className="text-[11px] text-amber-600 font-medium">
-                {formatRupiah(unit.kerugian_harian || Math.round(hargaBulan / 30))} / hari
+                {unit.persen_potensi_hilang ? `${unit.persen_potensi_hilang}% kapasitas bulanan` : `${formatRupiah(unit.kerugian_harian || Math.round(hargaBulan / 30))} / hari`}
               </span>
             </div>
 

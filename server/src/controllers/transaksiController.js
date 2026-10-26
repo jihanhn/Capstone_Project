@@ -33,7 +33,7 @@ const getAllTransaksi = async (req, res) => {
 
     // Ambil seluruh riwayat transaksi / pembayaran untuk tagihan-tagihan ini
     const allRiwayat = await db.allAsync(`
-      SELECT id_pembayaran, id_transaksi, nominal_bayar, tanggal_bayar, catatan, created_at
+      SELECT id_pembayaran, id_transaksi, nominal_bayar, tanggal_bayar, metode_pembayaran, catatan, created_at
       FROM tbl_riwayat_pembayaran
       ORDER BY tanggal_bayar ASC, id_pembayaran ASC
     `);
@@ -47,6 +47,7 @@ const getAllTransaksi = async (req, res) => {
         id_transaksi: r.id_transaksi,
         nominal_bayar: parseFloat(r.nominal_bayar) || 0,
         tanggal_bayar: r.tanggal_bayar,
+        metode_pembayaran: r.metode_pembayaran || 'Transfer Bank',
         catatan: r.catatan,
         created_at: r.created_at
       });
@@ -68,6 +69,11 @@ const getAllTransaksi = async (req, res) => {
         ? [...riwayat_transaksi].sort((a, b) => new Date(b.tanggal_bayar) - new Date(a.tanggal_bayar))[0].tanggal_bayar
         : t.tgl_lunas;
 
+      // Metode pembayaran terkini
+      const latestMetode = riwayat_transaksi.length > 0
+        ? [...riwayat_transaksi].sort((a, b) => new Date(b.tanggal_bayar) - new Date(a.tanggal_bayar))[0].metode_pembayaran
+        : (t.metode_pembayaran || 'Transfer Bank');
+
       // Strict Rule: Jatuh tempo statis dari tgl_mulai_sewa penyewa
       const risk = computeRiskScore({
         periode: t.periode_bulan_tahun,
@@ -86,6 +92,7 @@ const getAllTransaksi = async (req, res) => {
         status_pembayaran: computedStatus,
         tgl_lunas: isLunas ? lastPayment : null,
         tgl_bayar_terakhir: lastPayment,
+        metode_pembayaran: latestMetode,
         riwayat_transaksi,
         riskScore: risk.score,
         kategoriRisiko: risk.kategori,
@@ -111,6 +118,7 @@ const createTransaksi = async (req, res) => {
       id_tagihan,
       nominal_bayar,
       tanggal_bayar = new Date().toISOString().split('T')[0],
+      metode_pembayaran,
       catatan,
       kode_kontrakan,
       id_penyewa,
@@ -121,6 +129,10 @@ const createTransaksi = async (req, res) => {
     if (!nominal || nominal <= 0) {
       return res.status(400).json({ error: 'Nominal pembayaran harus lebih besar dari 0' });
     }
+
+    const cleanMetode = (metode_pembayaran && String(metode_pembayaran).trim() !== '')
+      ? String(metode_pembayaran).trim()
+      : 'Transfer Bank';
 
     let targetIdTransaksi = id_tagihan ? parseInt(id_tagihan, 10) : null;
     let invoice = null;
@@ -167,13 +179,27 @@ const createTransaksi = async (req, res) => {
           return res.status(404).json({ error: 'Unit kontrakan tidak ditemukan' });
         }
 
-        const harga_sewa = parseFloat(unit.harga_saat_ini) || 0;
+        let harga_sewa = parseFloat(unit.harga_saat_ini) || 0;
+
+        // Cek riwayat harga: jika periode tagihan ini sebelum tanggal berlaku kenaikan tarif baru, gunakan harga lama
+        const riwayatList = await db.allAsync(
+          'SELECT * FROM tbl_riwayat_harga WHERE kode_kontrakan = ? ORDER BY tgl_berlaku DESC',
+          [kode_kontrakan]
+        );
+        const targetDate = `${periode_bulan_tahun}-01`;
+        for (const rh of riwayatList) {
+          const tglBerlakuStr = rh.tgl_berlaku ? String(rh.tgl_berlaku).substring(0, 10) : '';
+          if (targetDate < tglBerlakuStr) {
+            harga_sewa = parseFloat(rh.harga_lama) || harga_sewa;
+          }
+        }
+
         const insertTrx = await db.runAsync(`
           INSERT INTO tbl_transaksi_pembayaran
-          (kode_kontrakan, id_penyewa, periode_bulan_tahun, status_pembayaran, total_terbayar, harga_sewa_periode, catatan)
-          VALUES (?, ?, ?, 'Belum Lunas', 0, ?, ?)
+          (kode_kontrakan, id_penyewa, periode_bulan_tahun, status_pembayaran, total_terbayar, harga_sewa_periode, metode_pembayaran, catatan)
+          VALUES (?, ?, ?, 'Belum Lunas', 0, ?, ?, ?)
           RETURNING id_transaksi
-        `, [kode_kontrakan, id_penyewa, periode_bulan_tahun, harga_sewa, catatan || null]);
+        `, [kode_kontrakan, id_penyewa, periode_bulan_tahun, harga_sewa, cleanMetode, catatan || null]);
 
         targetIdTransaksi = insertTrx.rows ? insertTrx.rows[0]?.id_transaksi : insertTrx.lastID;
         invoice = {
@@ -187,11 +213,11 @@ const createTransaksi = async (req, res) => {
       ? tanggal_bayar
       : new Date().toISOString().split('T')[0];
 
-    // Simpan data pembayaran ke tbl_riwayat_pembayaran (One-to-Many)
+    // Simpan data pembayaran ke tbl_riwayat_pembayaran (One-to-Many) dengan metode pembayaran
     await db.runAsync(`
-      INSERT INTO tbl_riwayat_pembayaran (id_transaksi, nominal_bayar, tanggal_bayar, catatan)
-      VALUES (?, ?, ?, ?)
-    `, [targetIdTransaksi, nominal, cleanTglBayar, catatan || 'Cicilan pembayaran']);
+      INSERT INTO tbl_riwayat_pembayaran (id_transaksi, nominal_bayar, tanggal_bayar, metode_pembayaran, catatan)
+      VALUES (?, ?, ?, ?, ?)
+    `, [targetIdTransaksi, nominal, cleanTglBayar, cleanMetode, catatan || 'Cicilan pembayaran']);
 
     // Hitung ulang total terbayar menggunakan SUM riwayat_transaksi
     const sumRow = await db.getAsync(`
@@ -209,14 +235,15 @@ const createTransaksi = async (req, res) => {
 
     await db.runAsync(`
       UPDATE tbl_transaksi_pembayaran
-      SET total_terbayar = ?, status_pembayaran = ?, tgl_lunas = ?
+      SET total_terbayar = ?, status_pembayaran = ?, tgl_lunas = ?, metode_pembayaran = ?
       WHERE id_transaksi = ?
-    `, [totalTerbayar, statusPembayaran, tglLunas, targetIdTransaksi]);
+    `, [totalTerbayar, statusPembayaran, tglLunas, cleanMetode, targetIdTransaksi]);
 
     res.status(201).json({
-      message: `Pembayaran sebesar Rp ${nominal.toLocaleString('id-ID')} berhasil dicatat!`,
+      message: `Pembayaran sebesar Rp ${nominal.toLocaleString('id-ID')} berhasil dicatat via ${cleanMetode}!`,
       id_transaksi: targetIdTransaksi,
       id_tagihan: targetIdTransaksi,
+      metode_pembayaran: cleanMetode,
       total_terbayar: totalTerbayar,
       status_pembayaran: statusPembayaran
     });
@@ -286,8 +313,81 @@ const deleteTransaksi = async (req, res) => {
   }
 };
 
+const getArusKasMasuk = async (req, res) => {
+  try {
+    const { periode, tahun, kode_kontrakan, metode_pembayaran } = req.query;
+
+    let sql = `
+      SELECT 
+        r.id_pembayaran,
+        r.id_transaksi,
+        r.nominal_bayar,
+        r.tanggal_bayar,
+        r.metode_pembayaran,
+        r.catatan as catatan_bayar,
+        r.created_at,
+        t.periode_bulan_tahun as untuk_periode_tagihan,
+        t.kode_kontrakan,
+        t.harga_sewa_periode,
+        t.total_terbayar as total_terbayar_tagihan,
+        t.status_pembayaran as status_tagihan_sekarang,
+        k.nama_kontrakan,
+        p.id_penyewa,
+        p.nama_penyewa,
+        p.no_hp
+      FROM tbl_riwayat_pembayaran r
+      JOIN tbl_transaksi_pembayaran t ON r.id_transaksi = t.id_transaksi
+      JOIN tbl_kontrakan k ON t.kode_kontrakan = k.kode_kontrakan
+      JOIN tbl_penyewa p ON t.id_penyewa = p.id_penyewa
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (periode) {
+      sql += " AND (TO_CHAR(r.tanggal_bayar, 'YYYY-MM') = ? OR r.tanggal_bayar::TEXT LIKE ?)";
+      params.push(periode, `${periode}%`);
+    } else if (tahun) {
+      sql += " AND (TO_CHAR(r.tanggal_bayar, 'YYYY') = ? OR r.tanggal_bayar::TEXT LIKE ?)";
+      params.push(tahun, `${tahun}%`);
+    }
+
+    if (kode_kontrakan) {
+      sql += " AND t.kode_kontrakan = ?";
+      params.push(kode_kontrakan);
+    }
+
+    if (metode_pembayaran) {
+      sql += " AND r.metode_pembayaran ILIKE ?";
+      params.push(`%${metode_pembayaran}%`);
+    }
+
+    sql += " ORDER BY r.tanggal_bayar DESC, r.id_pembayaran DESC";
+
+    const rows = await db.allAsync(sql, params);
+
+    const totalKasMasuk = rows.reduce((sum, r) => sum + (parseFloat(r.nominal_bayar) || 0), 0);
+
+    const rekapMetode = {};
+    rows.forEach(r => {
+      const m = r.metode_pembayaran || 'Transfer Bank';
+      rekapMetode[m] = (rekapMetode[m] || 0) + (parseFloat(r.nominal_bayar) || 0);
+    });
+
+    res.json({
+      filter_periode: periode || tahun || 'Semua',
+      total_kas_masuk: totalKasMasuk,
+      total_transaksi_kas: rows.length,
+      rekap_metode: rekapMetode,
+      data: rows
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 module.exports = {
   getAllTransaksi,
+  getArusKasMasuk,
   createTransaksi,
   updateTransaksi,
   deleteTransaksi,

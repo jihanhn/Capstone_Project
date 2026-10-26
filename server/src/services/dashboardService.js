@@ -1,5 +1,6 @@
 const { db } = require('../database/db');
 const { computeRiskScore } = require('./riskEngine');
+const { calculateUnitVacancy } = require('../utils/vacancyCalculator');
 
 /**
  * Service untuk kalkulasi metrik ringkasan KPI dashboard
@@ -19,7 +20,7 @@ const getDashboardStats = async (periodeParam) => {
   const unitTerisi = terisiUnitRow?.terisi || 0;
   const occupancyRate = totalUnit > 0 ? ((unitTerisi / totalUnit) * 100).toFixed(1) : 0;
 
-  // 2. Transaksi periode ini
+  // 2. Transaksi periode ini (Basis Akrual / Hak Tagihan)
   const transaksiList = await db.allAsync(`
     SELECT t.*, k.nama_kontrakan, p.nama_penyewa, p.no_hp, p.tgl_mulai_sewa
     FROM tbl_transaksi_pembayaran t
@@ -28,32 +29,64 @@ const getDashboardStats = async (periodeParam) => {
     WHERE t.periode_bulan_tahun = ?
   `, [periode]);
 
-  let totalPenerimaan = 0;
-  let totalPotensi = 0;
-  let tunggakanBulanIni = 0;
+  // Realisasi Kas Masuk Fisik yang benar-benar masuk pada bulan periode ini (Basis Kas)
+  const kasRow = await db.getAsync(`
+    SELECT COALESCE(SUM(nominal_bayar), 0) as total_kas_masuk
+    FROM tbl_riwayat_pembayaran
+    WHERE TO_CHAR(tanggal_bayar, 'YYYY-MM') = ? OR tanggal_bayar::TEXT LIKE ?
+  `, [periode, `${periode}%`]);
+  const totalPenerimaan = parseFloat(kasRow?.total_kas_masuk) || 0;
 
-  transaksiList.forEach(t => {
-    totalPenerimaan += parseFloat(t.total_terbayar) || 0;
-    totalPotensi += parseFloat(t.harga_sewa_periode) || 0;
-    const sisa = (parseFloat(t.harga_sewa_periode) || 0) - (parseFloat(t.total_terbayar) || 0);
-    if (sisa > 0) tunggakanBulanIni += sisa;
-  });
+  // Total Potensi Tagihan periode ini
+  const totalPotensi = transaksiList.reduce((acc, t) => acc + (parseFloat(t.harga_sewa_periode) || 0), 0);
 
-  // 3. Early Warning Scores
-  const warnings = transaksiList.map(t => {
-    const sisa = (parseFloat(t.harga_sewa_periode) || 0) - (parseFloat(t.total_terbayar) || 0);
+  // Tunggakan periode ini (potensi tagihan dikurangi uang yang sudah diterima pada/sebelum periode tersebut)
+  let terbayarUntukPeriodeIni = 0;
+  for (const t of transaksiList) {
+    const rRow = await db.getAsync(`
+      SELECT COALESCE(SUM(nominal_bayar), 0) as paid_in_period
+      FROM tbl_riwayat_pembayaran
+      WHERE id_transaksi = ?
+        AND (TO_CHAR(tanggal_bayar, 'YYYY-MM') <= ? OR tanggal_bayar::TEXT <= ?)
+    `, [t.id_transaksi, periode, `${periode}-31`]);
+    terbayarUntukPeriodeIni += (parseFloat(rRow?.paid_in_period) || 0);
+  }
+  const tunggakanBulanIni = Math.max(0, totalPotensi - terbayarUntukPeriodeIni);
+
+  // 3. Early Warning Scores untuk transaksi periode ini
+  const warnings = [];
+  for (const t of transaksiList) {
+    const rRow = await db.getAsync(`
+      SELECT COALESCE(SUM(nominal_bayar), 0) as paid_in_period
+      FROM tbl_riwayat_pembayaran
+      WHERE id_transaksi = ?
+        AND (TO_CHAR(tanggal_bayar, 'YYYY-MM') <= ? OR tanggal_bayar::TEXT <= ?)
+    `, [t.id_transaksi, periode, `${periode}-31`]);
+
+    const paidInPeriod = parseFloat(rRow?.paid_in_period) || 0;
+    const sisaInPeriod = Math.max(0, (parseFloat(t.harga_sewa_periode) || 0) - paidInPeriod);
+    const tglLunasEffective = sisaInPeriod <= 0 ? t.tgl_lunas : null;
+
     const risk = computeRiskScore({
       periode: t.periode_bulan_tahun || periode,
-      tglLunas: t.tgl_lunas,
+      tglLunas: tglLunasEffective,
       tglMulaiSewa: t.tgl_mulai_sewa,
-      statusPembayaran: t.status_pembayaran,
+      statusPembayaran: sisaInPeriod <= 0 ? 'Lunas' : (paidInPeriod > 0 ? 'Cicil' : 'Belum Lunas'),
       cicilan1: t.cicilan_1_rp,
       cicilan2: t.cicilan_2_rp,
-      totalTerbayar: t.total_terbayar,
+      totalTerbayar: paidInPeriod,
       hargaSewa: t.harga_sewa_periode
     });
-    return { ...t, sisa_tagihan: sisa, riskScore: risk.riskScore || risk.score, dueDay: risk.breakdown?.dueDay || 5, ...risk };
-  });
+
+    warnings.push({
+      ...t,
+      total_terbayar: paidInPeriod,
+      sisa_tagihan: sisaInPeriod,
+      riskScore: risk.riskScore || risk.score,
+      dueDay: risk.breakdown?.dueDay || 5,
+      ...risk
+    });
+  }
 
   const highRiskCount = warnings.filter(w => w.kategori === 'High').length;
   const medRiskCount = warnings.filter(w => w.kategori === 'Medium').length;
@@ -78,7 +111,7 @@ const getDashboardStats = async (periodeParam) => {
 };
 
 /**
- * Service untuk kalkulasi tren 12 bulan (Potensi Penuh, Realisasi, Biaya, Laba Bersih)
+ * Service untuk kalkulasi tren 12 bulan (Potensi Penuh, Realisasi Kas Masuk, Biaya, Laba Bersih)
  */
 const getFinancialTrend = async (tahunParam) => {
   const today = new Date();
@@ -89,19 +122,43 @@ const getFinancialTrend = async (tahunParam) => {
     'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
   ];
 
-  // Kapasitas sewa penuh jika 10 unit 100% terisi
+  // Kapasitas sewa penuh jika semua unit 100% terisi
   const totalSemuaUnit = await db.getAsync(`SELECT SUM(harga_saat_ini) as total_kapasitas FROM tbl_kontrakan`);
   const kapasitasPenuhPerBulan = parseFloat(totalSemuaUnit?.total_kapasitas) || 0;
 
-  // Realisasi penerimaan
-  const transRows = await db.allAsync(`
-    SELECT periode_bulan_tahun, SUM(total_terbayar) as realisasi, SUM(harga_sewa_periode) as transaksi_potensi
+  // 1. Realisasi Penerimaan Kas Riil (Basis Kas) per bulan uang diterima
+  const kasRows = await db.allAsync(`
+    SELECT 
+      TO_CHAR(tanggal_bayar, 'YYYY-MM') as periode,
+      SUM(nominal_bayar) as realisasi_kas
+    FROM tbl_riwayat_pembayaran
+    WHERE TO_CHAR(tanggal_bayar, 'YYYY') = ? OR tanggal_bayar::TEXT LIKE ?
+    GROUP BY TO_CHAR(tanggal_bayar, 'YYYY-MM')
+  `, [tahun, `${tahun}%`]);
+
+  // 2. Potensi Tagihan Sewa (Basis Akrual) per periode tagihan
+  const potensiRows = await db.allAsync(`
+    SELECT 
+      periode_bulan_tahun as periode,
+      SUM(harga_sewa_periode) as transaksi_potensi
     FROM tbl_transaksi_pembayaran
     WHERE periode_bulan_tahun LIKE ?
     GROUP BY periode_bulan_tahun
   `, [`${tahun}-%`]);
 
-  // Biaya pemeliharaan
+  // 3. Pembayaran yang diterima pada/sebelum bulan tagihan untuk tagihan bulan tersebut
+  const paidInMonthRows = await db.allAsync(`
+    SELECT 
+      t.periode_bulan_tahun as periode,
+      COALESCE(SUM(r.nominal_bayar), 0) as terbayar_di_periode
+    FROM tbl_transaksi_pembayaran t
+    JOIN tbl_riwayat_pembayaran r ON t.id_transaksi = r.id_transaksi
+    WHERE t.periode_bulan_tahun LIKE ?
+      AND (TO_CHAR(r.tanggal_bayar, 'YYYY-MM') <= t.periode_bulan_tahun OR r.tanggal_bayar::TEXT <= (t.periode_bulan_tahun || '-31'))
+    GROUP BY t.periode_bulan_tahun
+  `, [`${tahun}-%`]);
+
+  // 4. Biaya pemeliharaan
   const biayaRows = await db.allAsync(`
     SELECT TO_CHAR(tanggal_pengeluaran, 'MM') as bulan, SUM(biaya) as total_biaya
     FROM tbl_pengeluaran_maintenance
@@ -109,33 +166,32 @@ const getFinancialTrend = async (tahunParam) => {
     GROUP BY TO_CHAR(tanggal_pengeluaran, 'MM')
   `, [tahun]);
 
-  const trendMap = {};
-  transRows.forEach(r => {
-    trendMap[r.periode_bulan_tahun] = {
-      realisasi: parseFloat(r.realisasi) || 0,
-      transaksiPotensi: parseFloat(r.transaksi_potensi) || 0,
-      biaya: 0
-    };
-  });
+  const kasMap = {};
+  kasRows.forEach(r => { kasMap[r.periode] = parseFloat(r.realisasi_kas) || 0; });
 
+  const potensiMap = {};
+  potensiRows.forEach(r => { potensiMap[r.periode] = parseFloat(r.transaksi_potensi) || 0; });
+
+  const paidInMonthMap = {};
+  paidInMonthRows.forEach(r => { paidInMonthMap[r.periode] = parseFloat(r.terbayar_di_periode) || 0; });
+
+  const biayaMap = {};
   biayaRows.forEach(r => {
     const periode = `${tahun}-${r.bulan}`;
-    if (!trendMap[periode]) {
-      trendMap[periode] = { realisasi: 0, transaksiPotensi: 0, biaya: 0 };
-    }
-    trendMap[periode].biaya = parseFloat(r.total_biaya) || 0;
+    biayaMap[periode] = parseFloat(r.total_biaya) || 0;
   });
 
   const trendData = [];
   for (let m = 1; m <= 12; m++) {
     const monthStr = m.toString().padStart(2, '0');
     const periode = `${tahun}-${monthStr}`;
-    const item = trendMap[periode] || { realisasi: 0, transaksiPotensi: 0, biaya: 0 };
-    
+
+    const transaksiPotensi = potensiMap[periode] || 0;
     const potensi = kapasitasPenuhPerBulan;
-    const realisasi = item.realisasi;
-    const tunggakan = Math.max(0, (item.transaksiPotensi || 0) - (item.realisasi || 0));
-    const biaya = item.biaya;
+    const realisasi = kasMap[periode] || 0; // Uang riil yang fisik masuk kas di bulan ini
+    const terbayarDiBulan = paidInMonthMap[periode] || 0;
+    const tunggakan = Math.max(0, transaksiPotensi - terbayarDiBulan); // Tunggakan tagihan bulan ini yang belum masuk kas
+    const biaya = biayaMap[periode] || 0;
     const labaBersih = realisasi - biaya;
     const gap = Math.max(0, potensi - realisasi);
 
@@ -144,6 +200,7 @@ const getFinancialTrend = async (tahunParam) => {
       bulanSingkat: monthNames[m - 1].slice(0, 3),
       bulanLengkap: monthNames[m - 1],
       potensi,
+      transaksiPotensi,
       realisasi,
       tunggakan,
       biaya,
@@ -174,72 +231,80 @@ const getVacancyLoss = async () => {
     ORDER BY k.harga_saat_ini DESC
   `);
 
+  const perbaikanUnits = await db.allAsync(`
+    SELECT 
+      k.kode_kontrakan, 
+      k.nama_kontrakan, 
+      k.harga_saat_ini,
+      k.status_realtime,
+      k.status_detail,
+      k.nama_penyewa,
+      m.deskripsi as deskripsi_pemeliharaan,
+      m.biaya as biaya_pemeliharaan,
+      m.tanggal_pengeluaran as tanggal_mulai_pengerjaan
+    FROM v_status_unit_terkini k
+    LEFT JOIN tbl_pengeluaran_maintenance m ON k.kode_kontrakan = m.kode_kontrakan 
+      AND m.status_pengerjaan = 'Sedang Dikerjakan'
+    WHERE k.status_realtime = 'Dalam Perbaikan'
+    ORDER BY k.kode_kontrakan ASC
+  `);
+
   const totalSemuaUnit = await db.getAsync(`SELECT SUM(harga_saat_ini) as total, COUNT(*) as total_unit FROM tbl_kontrakan`);
   const totalKapasitas = parseFloat(totalSemuaUnit?.total) || 1;
   const totalSemuaKamar = parseInt(totalSemuaUnit?.total_unit, 10) || 1;
 
-  let totalKerugianBulanan = 0;
-  let totalKerugianAkumulasi = 0;
+  const totalKerugianBulanan = emptyUnits.reduce((sum, u) => sum + (parseFloat(u.harga_saat_ini) || 0), 0);
 
-  const vacancyList = emptyUnits.map((u, idx) => {
-    const hargaBulan = parseFloat(u.harga_saat_ini) || 0;
-    const kerugianHarian = Math.round(hargaBulan / 30);
-    totalKerugianBulanan += hargaBulan;
+  const vacancyList = await Promise.all(emptyUnits.map(async (u) => {
+    const lastTx = await db.getAsync(`
+      SELECT t.periode_bulan_tahun, p.nama_penyewa
+      FROM tbl_transaksi_pembayaran t
+      LEFT JOIN tbl_penyewa p ON t.id_penyewa = p.id_penyewa
+      WHERE t.kode_kontrakan = ?
+      ORDER BY t.periode_bulan_tahun DESC
+      LIMIT 1
+    `, [u.kode_kontrakan]);
 
-    const durasiHari = 14 + (idx * 7);
-    const kerugianAkumulasi = kerugianHarian * durasiHari;
-    totalKerugianAkumulasi += kerugianAkumulasi;
+    const lastPenyewa = await db.getAsync(`
+      SELECT p.*
+      FROM tbl_penyewa p
+      WHERE p.kode_kontrakan = ?
+      ORDER BY p.tgl_mulai_sewa DESC
+      LIMIT 1
+    `, [u.kode_kontrakan]);
 
-    let tingkatRisiko = 'Transisi (Rendah)';
-    let badgeColor = 'emerald';
-    let rekomendasi = [
-      'Bersihkan kamar dan pastikan sirkulasi udara baik.',
-      'Periksa kembali stopkontak, kran air, dan lampu agar siap huni seketika.',
-      'Pasang status WhatsApp promosi kamar kontrakan siap huni.'
-    ];
-
-    if (durasiHari > 30) {
-      tingkatRisiko = 'Kritis (Tinggi)';
-      badgeColor = 'rose';
-      rekomendasi = [
-        'Berikan promo diskon sewa Rp 50.000 untuk 3 bulan pertama.',
-        'Pasang iklan promosi kamar di Mamikos, OLX, dan Marketplace Facebook.',
-        'Pasang banner "Ada Kamar Kosong" di pagar gerbang depan.',
-        'Periksa kondisi cat dinding dan kebersihan kamar mandi agar memikat calon penyewa.'
-      ];
-    } else if (durasiHari >= 14) {
-      tingkatRisiko = 'Peringatan (Sedang)';
-      badgeColor = 'amber';
-      rekomendasi = [
-        'Bagikan foto kamar siap huni ke WhatsApp Story pengelola.',
-        'Berikan komisi rujukan Rp 100.000 untuk penyewa aktif yang merekomendasikan teman.',
-        'Pastikan lampu, stopkontak, dan pompa air berfungsi optimal.'
-      ];
-    }
+    const vac = calculateUnitVacancy({
+      unit: u,
+      lastTx,
+      lastPenyewa,
+      totalKapasitas,
+      totalKerugianBulanan
+    });
 
     return {
       kode_kontrakan: u.kode_kontrakan,
       nama_kontrakan: u.nama_kontrakan,
-      harga_sewa_bulan: hargaBulan,
-      kerugian_harian: kerugianHarian,
-      durasi_kosong_hari: durasiHari,
-      total_kerugian_akumulasi: kerugianAkumulasi,
-      penyewa_terakhir: 'Penyewa Sebelumnya',
-      tingkatRisiko,
-      badgeColor,
-      rekomendasi
+      ...vac,
+      penyewa_terakhir: vac.penyewa_terakhir || 'Belum ada penyewa'
     };
-  });
+  }));
 
-  const persenPotensiHilang = totalKapasitas > 0 ? Math.round((totalKerugianBulanan / totalKapasitas) * 100) : 0;
+  const totalKerugianAkumulasi = vacancyList.reduce((sum, u) => sum + (u.total_kerugian_akumulasi || 0), 0);
+  const totalDurasiKosong = vacancyList.reduce((sum, u) => sum + (u.durasi_kosong_hari || 0), 0);
+  const rataRataDurasiKosong = vacancyList.length > 0 ? Math.round(totalDurasiKosong / vacancyList.length) : 0;
+  const persenPotensiHilangTotal = totalKapasitas > 0 ? Math.round((totalKerugianBulanan / totalKapasitas) * 100) : 0;
 
   return {
     total_unit_kosong: emptyUnits.length,
+    total_unit_perbaikan: perbaikanUnits.length,
     total_semua_unit: totalSemuaKamar,
     total_kerugian_bulanan: totalKerugianBulanan,
     total_kerugian_akumulasi: totalKerugianAkumulasi,
-    persen_potensi_hilang: persenPotensiHilang,
-    vacancyList
+    persen_potensi_hilang: persenPotensiHilangTotal,
+    rata_rata_durasi_kosong: rataRataDurasiKosong,
+    total_durasi_kosong: totalDurasiKosong,
+    vacancyList,
+    perbaikanList: perbaikanUnits
   };
 };
 
@@ -268,17 +333,52 @@ const getEarlyWarnings = async (periodeParam, tahunParam) => {
   `;
   const transRows = await db.allAsync(query, params);
 
+  const isMonthFiltered = Boolean(periodeParam && String(periodeParam).trim() !== '');
   const warnings = [];
-  transRows.forEach(t => {
-    const sisa = (parseFloat(t.harga_sewa_periode) || 0) - (parseFloat(t.total_terbayar) || 0);
+
+  for (const t of transRows) {
+    let terbayar = parseFloat(t.total_terbayar) || 0;
+    let sisa = Math.max(0, (parseFloat(t.harga_sewa_periode) || 0) - terbayar);
+    let statusPembayaran = t.status_pembayaran;
+    let tglLunasEffective = t.tgl_lunas;
+    let catatanPelunasan = null;
+
+    if (isMonthFiltered) {
+      // Jika difilter per bulan spesifik, hitung status dan sisa tagihan pada bulan tersebut
+      const rRow = await db.getAsync(`
+        SELECT 
+          COALESCE(SUM(CASE WHEN (TO_CHAR(tanggal_bayar, 'YYYY-MM') <= ? OR tanggal_bayar::TEXT <= ?) THEN nominal_bayar ELSE 0 END), 0) as paid_in_period,
+          COALESCE(SUM(CASE WHEN NOT (TO_CHAR(tanggal_bayar, 'YYYY-MM') <= ? OR tanggal_bayar::TEXT <= ?) THEN nominal_bayar ELSE 0 END), 0) as paid_after_period,
+          MAX(CASE WHEN NOT (TO_CHAR(tanggal_bayar, 'YYYY-MM') <= ? OR tanggal_bayar::TEXT <= ?) THEN tanggal_bayar ELSE NULL END) as latest_after_date
+        FROM tbl_riwayat_pembayaran
+        WHERE id_transaksi = ?
+      `, [periodeParam, `${periodeParam}-31`, periodeParam, `${periodeParam}-31`, periodeParam, `${periodeParam}-31`, t.id_transaksi]);
+
+      const paidInPeriod = parseFloat(rRow?.paid_in_period) || 0;
+      const paidAfterPeriod = parseFloat(rRow?.paid_after_period) || 0;
+      const latestAfterDate = rRow?.latest_after_date;
+
+      terbayar = paidInPeriod;
+      sisa = Math.max(0, (parseFloat(t.harga_sewa_periode) || 0) - paidInPeriod);
+
+      if (sisa > 0) {
+        statusPembayaran = paidInPeriod > 0 ? 'Cicil' : 'Belum Lunas';
+        tglLunasEffective = null;
+        if (paidAfterPeriod >= sisa) {
+          const tglStr = latestAfterDate ? String(latestAfterDate).split('T')[0] : 'bulan berikutnya';
+          catatanPelunasan = `Sisa tagihan Rp ${sisa.toLocaleString('id-ID')} dilunasi pada tanggal ${tglStr} (masuk arus kas bulan berikutnya).`;
+        }
+      }
+    }
+
     const risk = computeRiskScore({
       periode: t.periode_bulan_tahun,
-      tglLunas: t.tgl_lunas,
+      tglLunas: tglLunasEffective,
       tglMulaiSewa: t.tgl_mulai_sewa,
-      statusPembayaran: t.status_pembayaran,
+      statusPembayaran,
       cicilan1: t.cicilan_1_rp,
       cicilan2: t.cicilan_2_rp,
-      totalTerbayar: t.total_terbayar,
+      totalTerbayar: terbayar,
       hargaSewa: t.harga_sewa_periode
     });
 
@@ -291,18 +391,19 @@ const getEarlyWarnings = async (periodeParam, tahunParam) => {
         nama_penyewa: t.nama_penyewa,
         no_hp: t.no_hp,
         periode: t.periode_bulan_tahun,
-        total_terbayar: parseFloat(t.total_terbayar) || 0,
+        total_terbayar: terbayar,
         harga_sewa_periode: parseFloat(t.harga_sewa_periode) || 0,
         sisa_tagihan: sisa,
-        status_pembayaran: t.status_pembayaran,
+        status_pembayaran: statusPembayaran,
         tgl_lunas: t.tgl_lunas,
+        catatan_pelunasan: catatanPelunasan,
         tgl_mulai_sewa: t.tgl_mulai_sewa,
         dueDay: risk.breakdown?.dueDay || 5,
         riskScore: risk.riskScore || risk.score,
         ...risk
       });
     }
-  });
+  }
 
   warnings.sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0));
 

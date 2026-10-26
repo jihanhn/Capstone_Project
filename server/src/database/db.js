@@ -108,7 +108,7 @@ const initDbSchema = async () => {
         kode_kontrakan TEXT PRIMARY KEY,
         nama_kontrakan TEXT NOT NULL,
         harga_saat_ini NUMERIC NOT NULL,
-        status_unit TEXT NOT NULL CHECK(status_unit IN ('Terisi', 'Kosong'))
+        status_unit TEXT NOT NULL CHECK(status_unit IN ('Terisi', 'Kosong', 'Dalam Perbaikan'))
       )
     `);
 
@@ -127,7 +127,7 @@ const initDbSchema = async () => {
       )
     `);
 
-    // TABEL BARU: Untuk menghitung pengeluaran & laba bersih
+    // TABEL PENGELUARAN & MANAJEMEN PEMELIHARAAN
     await db.runAsync(`
       CREATE TABLE IF NOT EXISTS tbl_pengeluaran_maintenance (
         id_pengeluaran SERIAL PRIMARY KEY,
@@ -139,9 +139,19 @@ const initDbSchema = async () => {
         biaya NUMERIC NOT NULL DEFAULT 0,
         sumber_dana TEXT,
         keterangan TEXT,
+        status_pengerjaan TEXT NOT NULL DEFAULT 'Selesai',
+        tanggal_selesai DATE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       )
     `);
+
+    // Pastikan kolom status_pengerjaan & tanggal_selesai tersedia jika tabel sudah ada sebelumnya
+    try {
+      await db.runAsync(`ALTER TABLE tbl_pengeluaran_maintenance ADD COLUMN IF NOT EXISTS status_pengerjaan TEXT NOT NULL DEFAULT 'Selesai'`);
+      await db.runAsync(`ALTER TABLE tbl_pengeluaran_maintenance ADD COLUMN IF NOT EXISTS tanggal_selesai DATE`);
+    } catch (colErr) {
+      // Abaikan jika sudah ada
+    }
 
     await db.runAsync(`
       CREATE TABLE IF NOT EXISTS tbl_riwayat_harga (
@@ -166,6 +176,7 @@ const initDbSchema = async () => {
         cicilan_2_rp NUMERIC DEFAULT 0,
         total_terbayar NUMERIC NOT NULL DEFAULT 0,
         harga_sewa_periode NUMERIC NOT NULL,
+        metode_pembayaran TEXT DEFAULT 'Transfer Bank',
         catatan TEXT,
         UNIQUE(kode_kontrakan, periode_bulan_tahun),
         FOREIGN KEY (kode_kontrakan) REFERENCES tbl_kontrakan(kode_kontrakan) ON DELETE CASCADE,
@@ -180,19 +191,28 @@ const initDbSchema = async () => {
         id_transaksi INT NOT NULL,
         nominal_bayar NUMERIC NOT NULL,
         tanggal_bayar DATE NOT NULL DEFAULT CURRENT_DATE,
+        metode_pembayaran TEXT NOT NULL DEFAULT 'Transfer Bank',
         catatan TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         FOREIGN KEY (id_transaksi) REFERENCES tbl_transaksi_pembayaran(id_transaksi) ON DELETE CASCADE
       )
     `);
 
+    // Pastikan kolom metode_pembayaran tersedia pada tabel yang sudah ada sebelumnya
+    try {
+      await db.runAsync(`ALTER TABLE tbl_transaksi_pembayaran ADD COLUMN IF NOT EXISTS metode_pembayaran TEXT DEFAULT 'Transfer Bank'`);
+      await db.runAsync(`ALTER TABLE tbl_riwayat_pembayaran ADD COLUMN IF NOT EXISTS metode_pembayaran TEXT DEFAULT 'Transfer Bank'`);
+    } catch (colErr) {
+      // Abaikan jika kolom sudah ada
+    }
+
     // Migrasi data cicilan lama ke tbl_riwayat_pembayaran jika tabel riwayat masih kosong
     try {
       const countRiwayat = await db.getAsync('SELECT COUNT(*) as count FROM tbl_riwayat_pembayaran');
       if (parseInt(countRiwayat?.count || 0) === 0) {
         await db.runAsync(`
-          INSERT INTO tbl_riwayat_pembayaran (id_transaksi, nominal_bayar, tanggal_bayar, catatan)
-          SELECT id_transaksi, total_terbayar, COALESCE(tgl_lunas, CURRENT_DATE), 'Pembayaran awal'
+          INSERT INTO tbl_riwayat_pembayaran (id_transaksi, nominal_bayar, tanggal_bayar, metode_pembayaran, catatan)
+          SELECT id_transaksi, total_terbayar, COALESCE(tgl_lunas, CURRENT_DATE), 'Transfer Bank', 'Pembayaran awal'
           FROM tbl_transaksi_pembayaran
           WHERE total_terbayar > 0
         `);
@@ -201,25 +221,48 @@ const initDbSchema = async () => {
       console.warn('Migrasi riwayat pembayaran:', migErr.message);
     }
 
-    // VIEW BARU: Mengatasi bug unit terbaca terisi oleh penyewa lama
+    // VIEW BARU: Mendukung status Kosong, Terisi, serta integrasi pemeliharaan Sedang Dikerjakan untuk proteksi EWS Vacancy Loss
+    await db.runAsync(`DROP VIEW IF EXISTS v_status_unit_terkini CASCADE`);
     await db.runAsync(`
-      CREATE OR REPLACE VIEW v_status_unit_terkini AS
+      CREATE VIEW v_status_unit_terkini AS
+      WITH maintenance_aktif AS (
+        SELECT DISTINCT kode_kontrakan 
+        FROM tbl_pengeluaran_maintenance 
+        WHERE status_pengerjaan = 'Sedang Dikerjakan' AND kode_kontrakan IS NOT NULL
+      )
       SELECT 
           k.kode_kontrakan,
           k.nama_kontrakan,
           k.harga_saat_ini,
           CASE 
+              WHEN m.kode_kontrakan IS NOT NULL THEN 'Dalam Perbaikan'
+              WHEN k.status_unit = 'Dalam Perbaikan' THEN 'Dalam Perbaikan'
               WHEN p.id_penyewa IS NOT NULL THEN 'Terisi'
               ELSE 'Kosong'
           END AS status_realtime,
           p.id_penyewa,
           p.nama_penyewa,
           p.tgl_mulai_sewa,
-          p.tgl_selesai_sewa
+          p.tgl_selesai_sewa,
+          k.status_unit AS status_master,
+          CASE 
+              WHEN m.kode_kontrakan IS NOT NULL THEN NULL
+              WHEN p.id_penyewa IS NOT NULL THEN NULL
+              WHEN k.status_unit = 'Dalam Perbaikan' THEN NULL
+              ELSE k.tgl_kosong_sejak
+          END AS tgl_kosong_sejak,
+          CASE 
+              WHEN (m.kode_kontrakan IS NOT NULL OR k.status_unit = 'Dalam Perbaikan') AND p.id_penyewa IS NOT NULL THEN 'Perbaikan Ringan (Dihuni)'
+              WHEN (m.kode_kontrakan IS NOT NULL OR k.status_unit = 'Dalam Perbaikan') AND p.id_penyewa IS NULL THEN 'Perbaikan Berat (Kosong)'
+              WHEN p.id_penyewa IS NOT NULL THEN 'Terisi'
+              ELSE 'Kosong'
+          END AS status_detail,
+          CASE WHEN m.kode_kontrakan IS NOT NULL THEN TRUE ELSE FALSE END AS is_sedang_diperbaiki
       FROM tbl_kontrakan k
+      LEFT JOIN maintenance_aktif m ON k.kode_kontrakan = m.kode_kontrakan
       LEFT JOIN tbl_penyewa p ON k.kode_kontrakan = p.kode_kontrakan 
           AND p.status_sewa = 'Aktif'
-          AND (p.tgl_keluar_aktual IS NULL OR p.tgl_keluar_aktual >= CURRENT_DATE)
+          AND (p.tgl_keluar_aktual IS NULL OR p.tgl_keluar_aktual > CURRENT_DATE)
     `);
 
     await queryWithRetry(`
